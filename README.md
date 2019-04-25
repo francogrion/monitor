@@ -14,6 +14,7 @@ En caso de detectar alguna de las situaciones mencionadas en los puntos anterior
 mostrar por pantalla un mensaje de error indicando esta situación.
 
 Es importante tener en cuenta que:
+
 ● Los sensores envían 2 mediciones por segundo (en forma independiente y
 potencialmente simultánea).
 
