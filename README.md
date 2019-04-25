@@ -5,26 +5,36 @@ API to process sensor data
 Existen 4 sensores en un sistema que miden un valor numérico y deben enviarlo para su
 procesamiento. El sistema de monitoreo, toma estos valores y calcula tres parámetros:
 promedio, valor máximo y valor mínimo buscando alguna de las siguientes anomalías:
+
 ● La diferencia entre el valor mínimo y máximo recibido sea mayor a una constante S
 (configurable)
+
 ● El valor promedio sea superior a una constante M (configurable)
 En caso de detectar alguna de las situaciones mencionadas en los puntos anteriores, debe
 mostrar por pantalla un mensaje de error indicando esta situación.
+
 Es importante tener en cuenta que:
 ● Los sensores envían 2 mediciones por segundo (en forma independiente y
 potencialmente simultánea).
+
 ● El sistema de procesamiento, por limitaciones de hardware, sólo puede procesar
 información 2 veces por minuto.
+
 ● Se debe respetar el orden de ingreso de los mensajes al sistema de monitoreo.
+
 ● Todos los mensajes recibidos deben ser loggeados asi como también registrar
 información al momento de su procesamiento.
+
 En Java o C#, desarrolle un programa que se ejecute desde consola y que modele este
 sistema.
 Para probarlo,
+
 a) Escribir al menos dos tests que validen la funcionalidad alguna de las funcionalidades
 requeridas.
+
 b) Desde la consola se deberá poder ejecutar un caso en el los 4 sensores generen
 información aleatoria que será procesada por el sistema de monitoreo.
+
 PLUS: Permitir que el sistema de monitoreo reciba los mensajes mediante HTTP
 
 
