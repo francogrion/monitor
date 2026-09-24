@@ -1,111 +1,74 @@
 package com.utils;
 
 import com.domain.SensorData;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-import static org.hamcrest.core.Is.is;
-import static org.junit.Assert.assertThat;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
-public class MathUtilsTest {
+class MathUtilsTest {
 
     @Test
-    public void shouldReturnZeroWhenListIsNullForAvg() throws Exception {
-
-        double avg = MathUtils.calculateAverage(null);
-
-        assertThat(avg, is(0.0));
+    void shouldReturnZeroWhenListIsNullForAvg() {
+        assertEquals(0.0, MathUtils.calculateAverage(null));
     }
 
     @Test
-    public void shouldReturnZeroWhenListIsEmptyForAvg() throws Exception {
-
-        double avg = MathUtils.calculateAverage(Collections.emptyList());
-
-        assertThat(avg, is(0.0));
+    void shouldReturnZeroWhenListIsEmptyForAvg() {
+        assertEquals(0.0, MathUtils.calculateAverage(Collections.emptyList()));
     }
 
     @Test
-    public void shouldReturnDataAverageFromValidListWithOneElement() throws Exception {
-
-        double avg = MathUtils.calculateAverage(buildSensorDataListOneElement());
-
-        assertThat(avg, is(35.54));
+    void shouldReturnDataAverageFromValidListWithOneElement() {
+        assertEquals(35.54, MathUtils.calculateAverage(buildSensorDataListOneElement()));
     }
 
     @Test
-    public void shouldReturnDataAverageFromValidListWithSeveralElements() throws Exception {
-
-        double avg = MathUtils.calculateAverage(buildSensorDataListSeveralElements());
-
-        assertThat(avg, is(22.62));
+    void shouldReturnDataAverageFromValidListWithSeveralElements() {
+        assertEquals(22.62, MathUtils.calculateAverage(buildSensorDataListSeveralElements()));
     }
 
     @Test
-    public void shouldReturnZeroWhenListIsNullForMax() throws Exception {
-
-        double max = MathUtils.calculateMax(null);
-
-        assertThat(max, is(0.0));
+    void shouldReturnZeroWhenListIsNullForMax() {
+        assertEquals(0.0, MathUtils.calculateMax(null));
     }
 
     @Test
-    public void shouldReturnZeroWhenListIsEmptyForMax() throws Exception {
-
-        double max = MathUtils.calculateMax(null);
-
-        assertThat(max, is(0.0));
+    void shouldReturnZeroWhenListIsEmptyForMax() {
+        assertEquals(0.0, MathUtils.calculateMax(Collections.emptyList()));
     }
 
     @Test
-    public void shouldReturnMaxValueFromValidListWithOneElement() throws Exception {
-
-        double max = MathUtils.calculateMax(buildSensorDataListOneElement());
-
-        assertThat(max, is(35.54));
+    void shouldReturnMaxValueFromValidListWithOneElement() {
+        assertEquals(35.54, MathUtils.calculateMax(buildSensorDataListOneElement()));
     }
 
     @Test
-    public void shouldReturnMaxValueFromValidListWithSeveralElements() throws Exception {
-
-        double max = MathUtils.calculateMax(buildSensorDataListSeveralElements());
-
-        assertThat(max, is(35.54));
+    void shouldReturnMaxValueFromValidListWithSeveralElements() {
+        assertEquals(35.54, MathUtils.calculateMax(buildSensorDataListSeveralElements()));
     }
 
     @Test
-    public void shouldReturnZeroWhenListIsNullForMin() throws Exception {
-
-        double min = MathUtils.calculateMin(null);
-
-        assertThat(min, is(0.0));
+    void shouldReturnZeroWhenListIsNullForMin() {
+        assertEquals(0.0, MathUtils.calculateMin(null));
     }
 
     @Test
-    public void shouldReturnZeroWhenListIsEmptyForMin() throws Exception {
-
-        double min = MathUtils.calculateMin(null);
-
-        assertThat(min, is(0.0));
+    void shouldReturnZeroWhenListIsEmptyForMin() {
+        assertEquals(0.0, MathUtils.calculateMin(Collections.emptyList()));
     }
 
     @Test
-    public void shouldReturnMinValueFromValidListWithOneElement() throws Exception {
-
-        double min = MathUtils.calculateMin(buildSensorDataListOneElement());
-
-        assertThat(min, is(35.54));
+    void shouldReturnMinValueFromValidListWithOneElement() {
+        assertEquals(35.54, MathUtils.calculateMin(buildSensorDataListOneElement()));
     }
 
     @Test
-    public void shouldReturnMinValueFromValidListWithSeveralElements() throws Exception {
-
-        double min = MathUtils.calculateMin(buildSensorDataListSeveralElements());
-
-        assertThat(min, is(10.2));
+    void shouldReturnMinValueFromValidListWithSeveralElements() {
+        assertEquals(10.2, MathUtils.calculateMin(buildSensorDataListSeveralElements()));
     }
 
     private static List<SensorData> buildSensorDataListOneElement() {
