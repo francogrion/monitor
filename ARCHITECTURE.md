@@ -10,7 +10,8 @@ Este documento describe la arquitectura del servicio `monitor`, su evolución y 
 - Toda la configuración (puerto, base, defaults de `M`/`S`, cron y duraciones del lock) se toma de variables de entorno, con defaults en `application.yml` (ADR-005).
 - Empaquetado como imagen Docker (multi-stage, no-root, por capas) con health checks de liveness/readiness vía Actuator; `docker-compose.yml` levanta Postgres + el servicio (ADR-006).
 - Observabilidad: logs JSON (ECS) con campos estructurados por evento y métricas de negocio en `/actuator/prometheus`; la base tiene un timeout de conexión corto para fallar rápido (ADR-007).
-- Pendiente: hardening de la API (Fase 6 de `PLANNING.md`).
+- API versionada bajo `/api/v1`, con validación de entrada y errores en formato RFC 9457 Problem Details; base caída → 503 con `Retry-After` (ADR-008).
+- Las 6 fases del roadmap están completas; los pendientes propuestos están al final de `PLANNING.md`.
 
 ## Punto de partida (arquitectura original)
 
@@ -285,4 +286,59 @@ Con varias instancias en contenedores (ADR-004, ADR-006), leer logs de texto por
 
 ---
 
-*(Los próximos ADRs — hardening de la API, etc. — se agregan a medida que se van decidiendo, siguiendo las fases definidas en `PLANNING.md`.)*
+### ADR-008: API v1 — versionado, validación y errores RFC 9457 (Fase 6)
+
+**Estado:** Aceptada. **Cambio incompatible** con la API original.
+
+**Contexto:**
+Antes de cambiar nada se midió cómo respondía la API a entradas inválidas:
+
+| Entrada | Respuesta |
+|---|---|
+| Falta `data` o `sensorId` | 500: la restricción `NOT NULL` de la base explotaba recién al persistir |
+| `sensorId` con salto de línea | 200: en logs de texto generaba una línea de log falsa (log forging, CWE-117), verificado en el log |
+| `M` no numérico | 500, y la respuesta filtraba el mensaje interno de la excepción |
+| `S` negativo | 200: con `S < 0` todo ciclo es anomalía, porque max − min ≥ 0 |
+| Base caída | 500 genérico |
+
+Además, los errores venían en dos formatos distintos y sin indicar qué campo falló. Y el contrato de config era poco consistente: `POST` con el valor en la URL y respuestas con los números como strings.
+
+**Decisión:**
+
+*Versionado:*
+- Prefijo de ruta `/api/v1`. Es la estrategia más explícita y universal (se ve en logs, métricas y en la configuración de proxies/ingress), y no requiere que los clientes manden headers especiales.
+- **Las rutas sin versión se eliminaron** en vez de mantenerlas como alias deprecados. Mantenerlas implicaba conservar su contrato defectuoso (justamente lo que esta fase corrige) o cambiarles la forma, lo que igual rompería a sus clientes. El único cliente conocido es el `RestClient` del repo, actualizado en el mismo cambio. Si hubiera sensores desplegados que no se puedan actualizar a la vez, se agregarían aliases temporales con el header `Deprecation`.
+
+*Contrato v1:*
+- `POST /api/v1/monitor/data` devuelve **202 Accepted**, no 200: la lectura queda guardada para agregarse en el próximo ciclo, no se procesa en el request.
+- La configuración pasa a ser **un recurso**: `GET /api/v1/config` → `{"m":..,"s":..}`, y `PATCH /api/v1/config` actualiza `m` y/o `s` (un campo ausente no se toca) y devuelve la config resultante. Ambos valores se actualizan en una sola transacción. `ConfigService` ahora recibe `Double`; el parseo quedó en el borde HTTP (JSON).
+
+*Validación (Bean Validation, `spring-boot-starter-validation`):*
+- Requests como `record`s separados del dominio (`SensorReadingRequest`, `ConfigUpdateRequest`).
+- `sensorId`: 1-64 caracteres `[A-Za-z0-9._-]`. `timestamp`: 1-64 caracteres de una fecha/hora (`[0-9A-Za-z:.+-]`). Los conjuntos de caracteres acotados dejan afuera saltos de línea y caracteres de control, lo que **cierra el log forging** también en los logs de texto (en JSON ya salían escapados). El largo máximo evita el error de la base con `VARCHAR(255)`.
+- `data` obligatorio. `s ≥ 0`. `PATCH` vacío rechazado.
+- `timestamp` sigue siendo un string libre (dentro del patrón): tiparlo como ISO-8601 con zona rompería a los clientes que mandan el formato original (`20192304123322`). Queda como candidato para una v2.
+
+*Errores (RFC 9457 Problem Details):*
+- Un `@RestControllerAdvice` global que extiende `ResponseEntityExceptionHandler`, así todos los errores de Spring MVC (JSON inválido, 404, 415, etc.) salen en el mismo formato `application/problem+json`. Los errores de validación agregan una propiedad `errors` con `field` y `message`.
+- **Base caída → 503 con `Retry-After: 5`** (se mapean `CannotCreateTransactionException` y `DataAccessResourceFailureException`, que son las que aparecen cuando el pool no consigue conexión; ver ADR-007). 503 le indica al cliente que el problema es transitorio y cuándo reintentar. Se loguea como WARN sin stack trace, porque durante una caída llegan ~8 requests por segundo.
+- **Error inesperado → 500 con un detalle genérico.** El mensaje y el stack trace solo van al log (ERROR), nunca a la respuesta.
+
+**Alternativas consideradas:**
+- **Versionado nativo de Spring Framework 7** (`@GetMapping(version = "1")`, con la versión en path, header o query param): permite rangos de versiones (`"1.1+"`) y responde 400 a versiones inexistentes. Con una sola versión no aporta sobre el prefijo, y agrega configuración. Es el camino natural si aparece una v2 que convive con v1.
+- **Versionado por header o media type** (`Accept: application/vnd.monitor.v1+json`): más "puro", pero invisible en logs y métricas, y más difícil de usar desde sensores simples.
+- **Mantener un formato de error propio:** RFC 9457 es el estándar y Spring lo soporta de forma nativa.
+
+**Cómo se probó:**
+- `MonitorControllerTest` (`@WebMvcTest`, 11 tests): 202 con eco y mapeo al dominio; 400 con el campo nombrado por falta de `data`/`sensorId`, saltos de línea en `sensorId`/`timestamp` y `sensorId` demasiado largo; 400 por JSON inválido; 415 por content-type; 503 con `Retry-After` sin filtrar detalles; 500 sin filtrar el mensaje interno; la ruta vieja da 404. Los 11 fallaron primero.
+- `ConfigControllerTest` (7 tests) y `ConfigServiceTest` (actualización parcial, una sola escritura, defaults conservados).
+- Manual con `docker compose`: se repitió la tabla de la línea de base contra v1 y todas las entradas dieron el código esperado. El intento de log forging no apareció en el log. Con la base caída, `POST` y `GET` dieron 503 con `Retry-After: 5` en ~5 s; al volver la base, 202. El `RestClient` v1 envió 48 lecturas sin errores.
+
+**Consecuencias:**
+- 84 tests en total.
+- Los clientes del contrato original deben migrar a `/api/v1` (rutas nuevas, `PATCH` para config, 202 en vez de 200).
+- Queda pendiente publicar una especificación OpenAPI de v1.
+
+---
+
+*(Nuevos ADRs se agregan a medida que se toman decisiones; ver los próximos pasos propuestos al final de `PLANNING.md`.)*

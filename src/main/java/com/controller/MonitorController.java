@@ -1,17 +1,16 @@
 package com.controller;
 
-import com.domain.SensorData;
 import com.service.MonitorService;
+import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.util.Map;
-
 @RestController
+@RequestMapping("/api/v1/monitor")
 public class MonitorController {
 
     private final MonitorService monitorService;
@@ -20,14 +19,11 @@ public class MonitorController {
         this.monitorService = monitorService;
     }
 
-    @PostMapping("/monitor/data")
-    public SensorData readSensorData(@RequestBody SensorData sensorData) {
-        monitorService.read(sensorData);
-        return sensorData;
-    }
-
-    @ExceptionHandler(IllegalArgumentException.class)
-    public ResponseEntity<Map<String, String>> handleInvalidData(IllegalArgumentException e) {
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of("status", e.getMessage()));
+    // 202: the reading is stored and will be aggregated in the next cycle, not processed now
+    @PostMapping("/data")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public SensorReadingRequest readSensorData(@Valid @RequestBody SensorReadingRequest request) {
+        monitorService.read(request.toSensorData());
+        return request;
     }
 }

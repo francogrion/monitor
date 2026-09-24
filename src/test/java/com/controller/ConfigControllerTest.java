@@ -1,15 +1,22 @@
 package com.controller;
 
+import com.domain.MonitorConfig;
 import com.service.ConfigService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.ResultActions;
 
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.springframework.http.MediaType.APPLICATION_JSON;
+import static org.springframework.http.MediaType.APPLICATION_PROBLEM_JSON;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -18,6 +25,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @WebMvcTest(ConfigController.class)
 class ConfigControllerTest {
 
+    private static final String URL = "/api/v1/config";
+
     @Autowired
     private MockMvc mockMvc;
 
@@ -25,48 +34,72 @@ class ConfigControllerTest {
     private ConfigService configService;
 
     @Test
-    void shouldGetConstantM() throws Exception {
-        when(configService.getM()).thenReturn(22.0);
+    void shouldReturnBothConstants() throws Exception {
+        when(configService.getConfig()).thenReturn(new MonitorConfig(22.0, 34.0));
 
-        mockMvc.perform(get("/config/m"))
+        mockMvc.perform(get(URL))
                 .andExpect(status().isOk())
-                .andExpect(content().string("22.0"));
+                .andExpect(content().contentType(APPLICATION_JSON))
+                .andExpect(jsonPath("$.m").value(22.0))
+                .andExpect(jsonPath("$.s").value(34.0));
     }
 
     @Test
-    void shouldSetConstantM() throws Exception {
-        mockMvc.perform(post("/config/m/22"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.newValueForConstantM").value("22"));
+    void shouldUpdateOnlyMAndReturnTheResultingConfig() throws Exception {
+        when(configService.update(25.0, null)).thenReturn(new MonitorConfig(25.0, 34.0));
 
-        verify(configService).setM("22");
+        patchJson("{\"m\":25}")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.m").value(25.0))
+                .andExpect(jsonPath("$.s").value(34.0));
+
+        verify(configService).update(25.0, null);
     }
 
     @Test
-    void shouldReturn500WhenSettingMWithInvalidValue() throws Exception {
-        org.mockito.Mockito.doThrow(new NumberFormatException("For input string: \"abc\""))
-                .when(configService).setM("abc");
+    void shouldUpdateBothConstantsInOneCall() throws Exception {
+        when(configService.update(25.0, 40.0)).thenReturn(new MonitorConfig(25.0, 40.0));
 
-        mockMvc.perform(post("/config/m/abc"))
-                .andExpect(status().isInternalServerError())
-                .andExpect(jsonPath("$.status").value("For input string: \"abc\""));
+        patchJson("{\"m\":25,\"s\":40}").andExpect(status().isOk());
+
+        verify(configService).update(25.0, 40.0);
     }
 
     @Test
-    void shouldGetConstantS() throws Exception {
-        when(configService.getS()).thenReturn(34.0);
+    void shouldRejectNegativeS() throws Exception {
+        patchJson("{\"s\":-1}")
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.errors[?(@.field == 's')]").exists());
 
-        mockMvc.perform(get("/config/s"))
-                .andExpect(status().isOk())
-                .andExpect(content().string("34.0"));
+        verify(configService, never()).update(any(), any());
     }
 
     @Test
-    void shouldSetConstantS() throws Exception {
-        mockMvc.perform(post("/config/s/34"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.newValueForConstantS").value("34"));
+    void shouldRejectEmptyUpdate() throws Exception {
+        patchJson("{}")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors[0].message").value("at least one of m or s must be provided"));
 
-        verify(configService).setS("34");
+        verify(configService, never()).update(any(), any());
+    }
+
+    @Test
+    void shouldRejectNonNumericValue() throws Exception {
+        patchJson("{\"m\":\"abc\"}")
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(APPLICATION_PROBLEM_JSON));
+
+        verify(configService, never()).update(any(), any());
+    }
+
+    @Test
+    void shouldNoLongerServeUnversionedPaths() throws Exception {
+        mockMvc.perform(get("/config/m")).andExpect(status().isNotFound());
+        mockMvc.perform(post("/config/m/25")).andExpect(status().isNotFound());
+    }
+
+    private ResultActions patchJson(String json) throws Exception {
+        return mockMvc.perform(patch(URL).contentType(APPLICATION_JSON).content(json));
     }
 }

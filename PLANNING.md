@@ -60,8 +60,17 @@ Basado en el análisis de arquitectura (ver `ARCHITECTURE.md`). Estado: `[ ]` pe
 - [x] Timeouts/reintentos si se agregan integraciones externas (no se agregaron; la única dependencia externa, la base, ahora falla rápido con timeout configurable)
 
 ### Fase 6 — API
-- [ ] Versionado de endpoints
-- [ ] Validación de input y manejo de errores más específico
+- [x] Versionado de endpoints (`/api/v1`, ver ADR-008)
+- [x] Validación de input y manejo de errores más específico (Bean Validation + RFC 9457 Problem Details)
+
+### Próximos pasos propuestos (no planificados aún)
+Pendientes que fueron quedando anotados en los ADRs:
+- [ ] Pipeline de CI (build, tests contra Postgres, build de la imagen); evaluar Testcontainers para los tests de integración (ADR-003, ADR-006)
+- [ ] Manifiestos de despliegue (p. ej. Kubernetes) usando los probes de liveness/readiness (ADR-006)
+- [ ] Restringir `/actuator/prometheus` o moverlo a un puerto de management (ADR-007)
+- [ ] Especificación OpenAPI de la API v1 (ADR-008)
+- [ ] `timestamp` tipado (ISO-8601 con zona) en una futura versión de la API (ADR-008)
+- [ ] Validar al arranque el invariante entre cron y duraciones del lock (ADR-005)
 
 ## Notas
 - Cada decisión técnica relevante (por qué Spring Boot 4.1.1, por qué tal base de datos, etc.) se documenta en `ARCHITECTURE.md`, no acá.
