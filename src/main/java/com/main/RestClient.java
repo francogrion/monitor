@@ -18,7 +18,7 @@ import static com.utils.JsonUtils.dataToJson;
 public class RestClient {
 
     private static final Logger log = LoggerFactory.getLogger(RestClient.class);
-    private static final String BASE_URL = "http://localhost:8080";
+    static final String BASE_URL = System.getenv().getOrDefault("MONITOR_BASE_URL", "http://localhost:8080");
 
     public static void main(String[] args) {
 
@@ -52,7 +52,7 @@ public class RestClient {
 class ClientThread extends Thread {
 
     private static final Logger log = LoggerFactory.getLogger(ClientThread.class);
-    private static final String MONITOR_DATA_URL = "http://localhost:8080/monitor/data";
+    private static final String MONITOR_DATA_URL = RestClient.BASE_URL + "/monitor/data";
 
     private final SensorData sensorData;
     private final HttpClient httpClient = HttpClient.newHttpClient();

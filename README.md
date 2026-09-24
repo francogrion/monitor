@@ -70,6 +70,34 @@ instance performs it per slot (see [ARCHITECTURE.md](ARCHITECTURE.md) ADR-004):
 Running the test suite also requires a `monitor_test` database (`createdb -O monitor monitor_test`)
 for the repository integration tests (`@DataJpaTest` against a real Postgres, not an embedded fake).
 
+# Configuration
+
+Everything is configured through environment variables (defaults in `src/main/resources/application.yml`):
+
+| Variable | Default | Description |
+|---|---|---|
+| `SERVER_PORT` | `8080` | HTTP port |
+| `DB_URL` | `jdbc:postgresql://localhost:5432/monitor` | JDBC URL of the Postgres database |
+| `DB_USERNAME` | `monitor` | Database user |
+| `DB_PASSWORD` | `monitor` | Database password |
+| `MONITOR_DEFAULT_M` | `0` | Initial value of `M`, used until it is set via the API |
+| `MONITOR_DEFAULT_S` | `0` | Initial value of `S`, used until it is set via the API |
+| `MONITOR_AGGREGATION_CRON` | `0,30 * * * * *` | When aggregation runs (Spring cron, with seconds). Keep it wall-clock aligned so all instances fire in the same slots |
+| `MONITOR_LOCK_AT_LEAST_FOR` | `PT20S` | Minimum time the aggregation lock is held (absorbs clock skew between instances) |
+| `MONITOR_LOCK_AT_MOST_FOR` | `PT29S` | Maximum time the lock is held if the holder dies mid-run |
+| `MONITOR_SCHEDULING_ENABLED` | `true` | Set to `false` to disable scheduled aggregation on an instance |
+
+When changing the cron, keep `MONITOR_LOCK_AT_LEAST_FOR` ≤ `MONITOR_LOCK_AT_MOST_FOR` < interval between slots;
+otherwise a slot can be skipped (lock still held) or run twice (lock released too early).
+
+`M`/`S` defaults only apply while nothing is persisted: once a value is set via the API it is stored in the
+database and always wins, even after a restart with different defaults.
+
+The console test client targets `MONITOR_BASE_URL` (default `http://localhost:8080`):
+```
+	MONITOR_BASE_URL=http://localhost:8090 mvn exec:java@client
+```
+
 # Request to config constant M
 
 POST

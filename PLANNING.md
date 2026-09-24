@@ -48,7 +48,7 @@ Basado en el análisis de arquitectura (ver `ARCHITECTURE.md`). Estado: `[ ]` pe
 - [x] Verificar que múltiples instancias del servicio puedan correr en paralelo sin duplicar ni perder datos
 
 ### Fase 3 — Configuración externa
-- [ ] Externalizar puerto, valores iniciales de `M`/`S`, y demás configuración vía `application.yml` / variables de entorno
+- [x] Externalizar puerto, valores iniciales de `M`/`S`, y demás configuración vía `application.yml` / variables de entorno (ver ADR-005 y la tabla en `README.md`)
 
 ### Fase 4 — Empaquetado y despliegue
 - [ ] Dockerfile

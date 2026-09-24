@@ -7,7 +7,8 @@ Este documento describe la arquitectura del servicio `monitor`, su evolución y 
 - Spring Boot 4.1.1 sobre Java 25 (ADR-001, ADR-002).
 - Estado (`M`, `S` y lecturas pendientes de agregación) persistido en PostgreSQL vía Spring Data JPA, esquema versionado con Flyway (ADR-003).
 - Stateless a nivel de instancia: pueden correr N réplicas contra la misma base; la agregación periódica se coordina con ShedLock para que corra una sola vez por slot en todo el cluster (ADR-004).
-- Pendiente: configuración externa completa, containerización, observabilidad y hardening de la API (Fases 3–6 de `PLANNING.md`).
+- Toda la configuración (puerto, base, defaults de `M`/`S`, cron y duraciones del lock) se toma de variables de entorno, con defaults en `application.yml` (ADR-005).
+- Pendiente: containerización, observabilidad y hardening de la API (Fases 4–6 de `PLANNING.md`).
 
 ## Punto de partida (arquitectura original)
 
@@ -162,4 +163,35 @@ ShedLock inserta la fila de cada lock una sola vez y cachea en memoria que exist
 
 ---
 
-*(Los próximos ADRs — configuración externa, containerización, etc. — se agregan a medida que se van decidiendo, siguiendo las fases definidas en `PLANNING.md`.)*
+### ADR-005: Configuración externa vía variables de entorno (Fase 3)
+
+**Estado:** Aceptada
+
+**Contexto:**
+Tras las Fases 1 y 2, el puerto y la conexión a la base ya se leían de variables de entorno, pero seguían hardcodeados: los valores iniciales de `M`/`S` (0 implícito), el cron de agregación, las duraciones del lock y la URL del cliente de prueba de consola.
+
+**Decisión:**
+- **Variables de entorno como única interfaz de configuración**, con defaults declarados en `application.yml` mediante placeholders (`${MONITOR_DEFAULT_M:0}`). Es el mecanismo estándar para contenedores (factor III de 12-factor) y deja todas las perillas visibles en un solo archivo. La tabla completa está en `README.md`.
+- **Defaults de `M`/`S`** como `@ConfigurationProperties` tipado (`ConfigDefaults`, prefijo `monitor.defaults`) inyectado en `ConfigService`. Se usan solo mientras no hay configuración persistida. Una vez que `M` o `S` se setean por API, el valor persistido siempre gana, incluso si la instancia reinicia con otros defaults: la base es la fuente de verdad del estado (ADR-003), y cambiar un env var no debería pisar silenciosamente un valor que alguien configuró explícitamente.
+- **Primera escritura:** cuando se setea `M` por primera vez, la fila nueva guarda `S` con su default configurado, y viceversa. Antes se creaba con `0`, lo que hubiera hecho que configurar `M` "reseteara" el `S` por default.
+- **Cron y duraciones del lock** como placeholders directamente en las anotaciones (`@Scheduled(cron = "${monitor.aggregation.cron}")`, `@SchedulerLock(lockAtLeastFor = "${...}")`), porque las anotaciones no pueden leer un bean de configuración. Defaults: `0,30 * * * * *`, `PT20S`, `PT29S` (los de ADR-004).
+- `monitor.scheduling.enabled` (ADR-004) también se expone como `MONITOR_SCHEDULING_ENABLED`, lo que permite correr instancias que solo reciben datos, sin agregar.
+- El cliente de consola (`RestClient`) lee `MONITOR_BASE_URL`.
+
+**Alternativas consideradas:**
+- **Spring Cloud Config / servidor de configuración centralizado:** agrega un componente más para un servicio con una decena de parámetros. Los env vars se integran directo con Docker/Kubernetes (ConfigMaps/Secrets) en la Fase 4.
+- **Validar al arranque el invariante `lockAtLeastFor ≤ lockAtMostFor < intervalo del cron`:** calcular el intervalo de una expresión cron arbitraria no es trivial (puede no ser uniforme). Por ahora el invariante se documenta en `application.yml` y en el `README`. ShedLock ya rechaza en tiempo de ejecución `lockAtLeastFor > lockAtMostFor`.
+
+**Cómo se probó:**
+- `ConfigServiceTest`: con defaults distintos de cero (22/34), se devuelven cuando no hay nada persistido, los valores persistidos ganan, y la primera escritura de uno conserva el default del otro.
+- `ConfigDefaultsBindingTest` (`ApplicationContextRunner`, sin base): las propiedades se bindean al record, y quedan en `0` si no se configuran.
+- `AggregationConfigurationTest` (`@SpringBootTest` contra Postgres real): con propiedades custom, el cron registrado en el scheduler es el configurado, y el lock escrito en `shedlock` dura exactamente `lock-at-least-for` (45s en el test). Primero falló contra el código hardcodeado (cron fijo, 20s).
+- Manual: app en el puerto 8090 con `MONITOR_DEFAULT_M=22`, `MONITOR_DEFAULT_S=40`, cron cada 10s y lock de 5s/9s. `GET /config/m` y `GET /config/s` devolvieron 22/40; tras `POST /config/m/30`, la fila quedó con `m=30, s=40`. El `RestClient` con `MONITOR_BASE_URL=http://localhost:8090` envió 172 lecturas, la agregación corrió cada 10s y el lock quedó tomado 5s.
+
+**Consecuencias:**
+- 59 tests en total (5 nuevos).
+- Una configuración inconsistente de cron/lock no se detecta al arrancar; queda como riesgo operativo documentado.
+
+---
+
+*(Los próximos ADRs — containerización, observabilidad, etc. — se agregan a medida que se van decidiendo, siguiendo las fases definidas en `PLANNING.md`.)*
