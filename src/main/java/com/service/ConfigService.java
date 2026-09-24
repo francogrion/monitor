@@ -2,6 +2,7 @@ package com.service;
 
 import com.config.ConfigDefaults;
 import com.domain.ConfigEntity;
+import com.domain.MonitorConfig;
 import com.repository.ConfigRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -19,28 +20,31 @@ public class ConfigService {
         this.defaults = defaults;
     }
 
-    public double getM() {
-        return findConfig().getM();
+    public MonitorConfig getConfig() {
+        ConfigEntity config = findConfig();
+        return new MonitorConfig(config.getM(), config.getS());
     }
 
-    @Transactional
-    public void setM(String value) {
-        double parsed = Double.parseDouble(value);
-        ConfigEntity config = findConfig();
-        config.setM(parsed);
-        configRepository.save(config);
+    public double getM() {
+        return findConfig().getM();
     }
 
     public double getS() {
         return findConfig().getS();
     }
 
+    // null leaves that value unchanged
     @Transactional
-    public void setS(String value) {
-        double parsed = Double.parseDouble(value);
+    public MonitorConfig update(Double m, Double s) {
         ConfigEntity config = findConfig();
-        config.setS(parsed);
+        if (m != null) {
+            config.setM(m);
+        }
+        if (s != null) {
+            config.setS(s);
+        }
         configRepository.save(config);
+        return new MonitorConfig(config.getM(), config.getS());
     }
 
     private ConfigEntity findConfig() {

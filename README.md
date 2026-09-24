@@ -66,7 +66,7 @@ Business metrics, besides the JVM/HTTP/DB-pool ones Spring Boot provides:
 
 | Metric (Prometheus name) | Meaning |
 |---|---|
-| `monitor_readings_received_total` | readings accepted by `POST /monitor/data` |
+| `monitor_readings_received_total` | readings accepted by `POST /api/v1/monitor/data` |
 | `monitor_anomalies_total{type="average"\|"difference"}` | anomalies detected, by type |
 | `monitor_aggregation_batch_size_{count,sum,max}` | readings aggregated per cycle; `_count` is the number of cycles actually processed |
 | `tasks_scheduled_execution_seconds{code_function="processData"}` | duration and outcome of each aggregation run (provided by Spring). It also counts runs skipped because another instance held the lock |
@@ -145,43 +145,58 @@ The console test client targets `MONITOR_BASE_URL` (default `http://localhost:80
 	MONITOR_BASE_URL=http://localhost:8090 mvn exec:java@client
 ```
 
-# Request to config constant M
+# API (v1)
 
-POST
-endpoint:
-http://localhost:8080/config/m/{m}
+All endpoints live under `/api/v1`. The unversioned paths of earlier versions (`/monitor/data`, `/config/m/{m}`,
+...) were removed; see [ARCHITECTURE.md](ARCHITECTURE.md) ADR-008.
 
-example: http://localhost:8080/config/m/22
+## Send a sensor reading
 
-# Request to config constant S
-
-POST
-endpoint:
-http://localhost:8080/config/s/{s}
-
-# Request to get constant M
-
-GET
-endpoint:
-http://localhost:8080/config/m
-
-# Request to get constant S
-
-GET
-endpoint:
-http://localhost:8080/config/s
-
-
-# Request to send monitor data
-POST
-endpoint:
-http://localhost:8080/monitor/data
-
-body:
+`POST /api/v1/monitor/data` → `202 Accepted` (the reading is stored and aggregated in the next cycle)
 ```JSON
 {
-	"sensorId": 2,
+	"sensorId": "sensor-2",
 	"data": 33.54,
-	"timestamp": 20192304123322
+	"timestamp": "2026-09-24T08:12:49.515"
 }
 ```
+| Field | Rules |
+|---|---|
+| `sensorId` | required, 1-64 letters, digits, `.`, `_` or `-` |
+| `data` | required, number |
+| `timestamp` | required, 1-64 characters of a date-time: digits, letters, `:`, `.`, `+`, `-` |
+
+## Read the constants
+
+`GET /api/v1/config` → `200`
+```JSON
+{ "m": 25.0, "s": 34.0 }
+```
+
+## Update the constants
+
+`PATCH /api/v1/config` → `200` with the resulting constants. Send one or both; a missing one stays unchanged.
+```JSON
+{ "m": 25, "s": 34 }
+```
+`s` must be `>= 0` (it is a threshold for max − min, which is never negative).
+
+## Errors
+
+Errors use [RFC 9457 Problem Details](https://www.rfc-editor.org/rfc/rfc9457) (`application/problem+json`):
+```JSON
+{
+	"status": 400,
+	"title": "Bad Request",
+	"detail": "Invalid request content.",
+	"instance": "/api/v1/monitor/data",
+	"errors": [ { "field": "data", "message": "must not be null" } ]
+}
+```
+| Status | When |
+|---|---|
+| `400` | invalid body: missing/invalid fields (listed in `errors`), malformed JSON, wrong types |
+| `404` | unknown path |
+| `415` | body is not `application/json` |
+| `503` | the database is unavailable; retry after the `Retry-After` header (seconds) |
+| `500` | unexpected error (details are only logged, never returned) |

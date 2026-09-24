@@ -26,8 +26,7 @@ public class RestClient {
 
         try {
             //config constants
-            sendConfig(httpClient, "/config/m/25");
-            sendConfig(httpClient, "/config/s/34");
+            sendConfig(httpClient, "{\"m\":25,\"s\":34}");
         } catch (Exception e) {
             log.error(e.getMessage());
         }
@@ -40,9 +39,10 @@ public class RestClient {
         }
     }
 
-    private static void sendConfig(HttpClient httpClient, String path) throws Exception {
-        HttpRequest request = HttpRequest.newBuilder(URI.create(BASE_URL + path))
-                .POST(HttpRequest.BodyPublishers.noBody())
+    private static void sendConfig(HttpClient httpClient, String json) throws Exception {
+        HttpRequest request = HttpRequest.newBuilder(URI.create(BASE_URL + "/api/v1/config"))
+                .header("Content-Type", "application/json")
+                .method("PATCH", HttpRequest.BodyPublishers.ofString(json))
                 .build();
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
         log.info(response.body());
@@ -52,7 +52,7 @@ public class RestClient {
 class ClientThread extends Thread {
 
     private static final Logger log = LoggerFactory.getLogger(ClientThread.class);
-    private static final String MONITOR_DATA_URL = RestClient.BASE_URL + "/monitor/data";
+    private static final String MONITOR_DATA_URL = RestClient.BASE_URL + "/api/v1/monitor/data";
 
     private final SensorData sensorData;
     private final HttpClient httpClient = HttpClient.newHttpClient();
