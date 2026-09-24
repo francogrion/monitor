@@ -29,7 +29,37 @@ b) Should be possible to run a test from the console with random data from each 
 
 PLUS: Allow the system to get messages via HTTP.
 
-# Steps to run the server
+# Running with Docker
+
+The quickest way to run everything (Postgres + the service) only requires Docker:
+```
+	docker compose up --build                  # one instance on http://localhost:8080
+	docker compose up --build --scale app=2    # two instances on ports 8080 and 8081, sharing the DB
+	docker compose down -v                     # stop and delete the database volume
+```
+The image can also be built and run on its own, pointing it at any Postgres via the env vars in
+[Configuration](#configuration):
+```
+	docker build -t monitor .
+	docker run -p 8080:8080 -e DB_URL=jdbc:postgresql://<host>:5432/monitor monitor
+```
+The image build skips the tests (they need a real Postgres); run `mvn verify` for them.
+
+# Health checks
+
+Only the health endpoints of Spring Boot Actuator are exposed:
+
+| Endpoint | Includes | Use it for |
+|---|---|---|
+| `/actuator/health` | all components (no details) | general status |
+| `/actuator/health/liveness` | the application only | restart the container if it fails |
+| `/actuator/health/readiness` | the application and the database | stop sending traffic while it fails |
+
+A database outage makes readiness return `503` while liveness stays `200`: the instance stops receiving
+traffic but is not restarted (restarting can't fix the database). The Docker image's `HEALTHCHECK` uses
+readiness.
+
+# Steps to run the server without Docker
 
 Requires **JDK 25** and a **PostgreSQL** instance (config constants and pending sensor
 readings are persisted there; see [ARCHITECTURE.md](ARCHITECTURE.md) ADR-003).

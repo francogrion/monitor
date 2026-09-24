@@ -15,6 +15,23 @@ spring:
 server:
   port: ${SERVER_PORT:8080}
 
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-components: always
+      show-details: never
+      probes:
+        enabled: true
+      group:
+        # Readiness includes the DB (stop routing traffic while it's down); liveness deliberately
+        # doesn't, since restarting the app can't fix the DB and would only cause restart loops
+        readiness:
+          include: readinessState, db
+
 monitor:
   # Used only until M/S are set via the API; persisted values always win afterwards
   defaults:

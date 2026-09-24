@@ -8,7 +8,8 @@ Este documento describe la arquitectura del servicio `monitor`, su evolución y 
 - Estado (`M`, `S` y lecturas pendientes de agregación) persistido en PostgreSQL vía Spring Data JPA, esquema versionado con Flyway (ADR-003).
 - Stateless a nivel de instancia: pueden correr N réplicas contra la misma base; la agregación periódica se coordina con ShedLock para que corra una sola vez por slot en todo el cluster (ADR-004).
 - Toda la configuración (puerto, base, defaults de `M`/`S`, cron y duraciones del lock) se toma de variables de entorno, con defaults en `application.yml` (ADR-005).
-- Pendiente: containerización, observabilidad y hardening de la API (Fases 4–6 de `PLANNING.md`).
+- Empaquetado como imagen Docker (multi-stage, no-root, por capas) con health checks de liveness/readiness vía Actuator; `docker-compose.yml` levanta Postgres + el servicio (ADR-006).
+- Pendiente: observabilidad y hardening de la API (Fases 5–6 de `PLANNING.md`).
 
 ## Punto de partida (arquitectura original)
 
@@ -194,4 +195,48 @@ Tras las Fases 1 y 2, el puerto y la conexión a la base ya se leían de variabl
 
 ---
 
-*(Los próximos ADRs — containerización, observabilidad, etc. — se agregan a medida que se van decidiendo, siguiendo las fases definidas en `PLANNING.md`.)*
+### ADR-006: Imagen Docker, docker-compose y health checks con Actuator (Fase 4)
+
+**Estado:** Aceptada
+
+**Contexto:**
+El servicio ya era stateless y configurable por variables de entorno (ADR-004, ADR-005), pero se distribuía como un jar que requería JDK 25 y un Postgres instalados a mano, y no tenía forma de que un orquestador supiera si una instancia estaba viva o lista para recibir tráfico.
+
+**Decisión:**
+
+*Health checks (Spring Boot Actuator):*
+- Solo se expone el endpoint `health` (`management.endpoints.web.exposure.include=health`); `env`, `beans`, `configprops`, etc. quedan cerrados porque pueden filtrar configuración y secretos.
+- `show-components: always` + `show-details: never`: se ve qué componente falla (`db`, `diskSpace`…) pero no sus detalles (versión de la base, URL, etc.).
+- Probes separados:
+  - **Liveness** (`/actuator/health/liveness`) solo refleja el estado interno de la aplicación. Si falla, el contenedor se reinicia.
+  - **Readiness** (`/actuator/health/readiness`) incluye además la base de datos. Si Postgres cae, la instancia deja de recibir tráfico (503) pero **no** se reinicia: reiniciar no arregla la base y, con varias réplicas, generaría reinicios en cadena justo cuando la base se está recuperando.
+
+*Imagen (`Dockerfile`):*
+- **Multi-stage:** compila con `maven:3.9-eclipse-temurin-25` y corre sobre `eclipse-temurin:25-jre`, sin Maven ni JDK completo en la imagen final.
+- **Jar por capas** (`java -Djarmode=tools -jar ... extract --layers`): dependencias, dependencias snapshot y aplicación van en capas separadas. Un cambio de código solo reconstruye y sube la capa de aplicación (~37 KB); las ~80 dependencias quedan cacheadas.
+- **Usuario no-root** (`app`, uid 999).
+- `JDK_JAVA_OPTIONS=-XX:MaxRAMPercentage=75`, para que el heap se dimensione según el límite de memoria del contenedor.
+- **`HEALTHCHECK` contra readiness usando `bash` y `/dev/tcp`**: la imagen base no trae `curl` ni `wget`, e instalarlos agregaría tamaño y superficie de ataque solo para esto. Se valida el código HTTP (`200` vs `503`), no el cuerpo.
+- **Los tests no corren en el build de la imagen**, porque necesitan un Postgres real (ADR-003). Corren con `mvn verify` en el pipeline de tests.
+
+*`docker-compose.yml` (entorno local):* Postgres 16 con volumen y healthcheck (`pg_isready`), y la app arranca recién cuando la base está healthy. Los puertos `8080-8081` permiten `--scale app=2` para probar el escenario multi-instancia de ADR-004. Las credenciales son de desarrollo y se pueden sobrescribir con `DB_PASSWORD`.
+
+**Alternativas consideradas:**
+- **Buildpacks (`mvn spring-boot:build-image`):** genera una imagen buena sin escribir Dockerfile, pero es menos transparente y más difícil de ajustar (usuario, healthcheck, flags de JVM). El Dockerfile explícito deja cada decisión a la vista.
+- **Imagen base distroless:** más chica y sin shell, pero entonces el `HEALTHCHECK` necesitaría un binario propio. Queda como mejora si el tamaño de la imagen se vuelve relevante.
+- **Incluir la base en liveness:** descartado por el riesgo de reinicios en cadena explicado arriba.
+
+**Cómo se probó:**
+- `HealthEndpointTest` (`@SpringBootTest` + MockMvc, Postgres real): health `UP` con el componente `db` y sin detalles, liveness `UP` **sin** `db`, readiness `UP` con `db`, y `env`/`beans`/`configprops` devuelven 404. Primero falló (404 en todos los probes) antes de agregar Actuator.
+- Imagen: se construyó y se inspeccionó (usuario `app`, capa de aplicación de 37 KB, healthcheck configurado).
+- Stack completo con `docker compose`: el contenedor pasó a `healthy` en ~6s y la API funcionó. Con `docker compose stop db`, readiness devolvió 503 (`db: DOWN`), liveness siguió en 200 y Docker marcó el contenedor `unhealthy` sin reiniciarlo. Al volver la base, se recuperó solo y `M` seguía persistido. Con `--scale app=2`, las dos réplicas recibieron datos (148 lecturas repartidas) pero solo una agregó, una vez por slot (ADR-004 funcionando entre contenedores).
+
+**Nota sobre el entorno de desarrollo remoto:** en el sandbox donde se hizo este trabajo, los contenedores salen a internet por un proxy que Maven no toma de las variables de entorno. Para verificar, la imagen se construyó con una copia temporal del Dockerfile que agregaba un `settings.xml` con ese proxy en la etapa de build. El Dockerfile commiteado no tiene nada específico de ese entorno y en una máquina o CI normal funciona tal cual.
+
+**Pendiente / consecuencias:**
+- 64 tests en total (5 nuevos).
+- Todavía no hay pipeline de CI ni manifiestos de Kubernetes. Con Docker disponible en CI se puede evaluar Testcontainers para los tests de integración (mencionado en ADR-003).
+
+---
+
+*(Los próximos ADRs — observabilidad, hardening de la API, etc. — se agregan a medida que se van decidiendo, siguiendo las fases definidas en `PLANNING.md`.)*
