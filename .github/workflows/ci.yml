@@ -80,6 +80,8 @@ jobs:
             -d '{"sensorId":"ci","data":1.5,"timestamp":"2026-01-01T00:00:00"}')
           echo "POST /api/v1/monitor/data -> $status"
           test "$status" = 202
+          curl --fail-with-body -sS localhost:8080/v3/api-docs | grep -q '"version":"v1"'
+          echo "OpenAPI document served"
 
       - name: Show service logs
         if: failure()

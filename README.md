@@ -151,6 +151,7 @@ Everything is configured through environment variables (defaults in `src/main/re
 | `MONITOR_LOCK_AT_LEAST_FOR` | `PT20S` | Minimum time the aggregation lock is held (absorbs clock skew between instances) |
 | `MONITOR_LOCK_AT_MOST_FOR` | `PT29S` | Maximum time the lock is held if the holder dies mid-run |
 | `MONITOR_SCHEDULING_ENABLED` | `true` | Set to `false` to disable scheduled aggregation on an instance |
+| `OPENAPI_ENABLED` | `true` | Serve the OpenAPI document at `/v3/api-docs`; `false` returns `404` |
 | `LOGGING_STRUCTURED_FORMAT_CONSOLE` | unset (`ecs` in the Docker image) | JSON log format: `ecs`, `logstash` or `gelf`; unset for plain text |
 
 When changing the cron, keep `MONITOR_LOCK_AT_LEAST_FOR` ≤ `MONITOR_LOCK_AT_MOST_FOR` < interval between slots;
@@ -169,6 +170,14 @@ The console test client targets `MONITOR_BASE_URL` (default `http://localhost:80
 
 All endpoints live under `/api/v1`. The unversioned paths of earlier versions (`/monitor/data`, `/config/m/{m}`,
 ...) were removed; see [ARCHITECTURE.md](ARCHITECTURE.md) ADR-008.
+
+The OpenAPI 3.1 specification is committed in [`docs/openapi.yaml`](docs/openapi.yaml) and also served by the
+service at `/v3/api-docs` (JSON) and `/v3/api-docs.yaml`, on the API port. Load either into any OpenAPI viewer or
+client generator. The committed file is generated from the code, and a test fails when they drift apart; after
+changing the API, regenerate it with:
+```
+	mvn test -Dtest=OpenApiSpecTest -Dopenapi.update=true
+```
 
 ## Send a sensor reading
 

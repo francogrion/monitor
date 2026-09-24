@@ -11,7 +11,7 @@ Este documento describe la arquitectura del servicio `monitor`, su evolución y 
 - Empaquetado como imagen Docker (multi-stage, no-root, por capas) con health checks de liveness/readiness vía Actuator; `docker-compose.yml` levanta Postgres + el servicio (ADR-006).
 - Observabilidad: logs JSON (ECS) con campos estructurados por evento y métricas de negocio en `/actuator/prometheus`; la base tiene un timeout de conexión corto para fallar rápido (ADR-007).
 - Actuator (probes y Prometheus) en un puerto de management propio (9090), separado del puerto de la API (8080) (ADR-012).
-- API versionada bajo `/api/v1`, con validación de entrada y errores en formato RFC 9457 Problem Details; base caída → 503 con `Retry-After` (ADR-008).
+- API versionada bajo `/api/v1`, con validación de entrada y errores en formato RFC 9457 Problem Details; base caída → 503 con `Retry-After` (ADR-008). Contrato OpenAPI 3.1 generado desde el código, servido en `/v3/api-docs` y versionado en `docs/openapi.yaml` (ADR-013).
 - CI en GitHub Actions: tests contra Postgres real y smoke test de la imagen Docker en cada PR; Dependabot mantiene actualizadas las dependencias (ADR-009).
 - Las 6 fases del roadmap están completas; los pendientes propuestos están al final de `PLANNING.md`.
 
@@ -339,7 +339,7 @@ Además, los errores venían en dos formatos distintos y sin indicar qué campo 
 **Consecuencias:**
 - 84 tests en total.
 - Los clientes del contrato original deben migrar a `/api/v1` (rutas nuevas, `PATCH` para config, 202 en vez de 200).
-- Queda pendiente publicar una especificación OpenAPI de v1.
+- Queda pendiente publicar una especificación OpenAPI de v1. *(Resuelto en ADR-013.)*
 
 ---
 
@@ -455,6 +455,50 @@ Los probes y `/actuator/prometheus` se servían en el mismo puerto que la API (A
 - 96 tests en total (3 nuevos).
 - Correr dos instancias en la misma máquina ahora requiere puertos distintos también para management (`MANAGEMENT_SERVER_PORT=9091`); el README lo muestra.
 - Cualquier monitoreo externo que apuntara a `:8080/actuator/...` tiene que pasar a `:9090`.
+
+---
+
+### ADR-013: Especificación OpenAPI de v1 generada desde el código y versionada en el repo
+
+**Estado:** Aceptada. Resuelve el pendiente de ADR-008.
+
+**Contexto:**
+El contrato de la API v1 solo estaba descripto en el README. Un cliente no tenía un documento que pudiera validar ni usar para generar código, y nada impedía que el README y el código se contradijeran.
+
+**Decisión:**
+- **Generado desde el código** con springdoc-openapi 3.1.1 (`springdoc-openapi-starter-webmvc-api`), la línea para Spring Boot 4: la versión 3.1.1 compila contra Spring Boot 4.1.0. Las reglas de Bean Validation (`@NotBlank`, `@Pattern`, `@PositiveOrZero`) se traducen solas a `required`, `pattern` y `minimum`, así que la spec no puede contradecir la validación real. Lo que springdoc no puede inferir se declara con anotaciones: resúmenes, descripciones y ejemplos, `minProperties: 1` en el `PATCH` y `required` en la respuesta de config.
+- **Errores:** las respuestas de `ApiExceptionHandler` no se ven por operación, así que un `OpenApiCustomizer` las agrega a todas. `400` (con la lista `errors`) y `415` solo van en operaciones con body. `500` y `503` van en todas, y `503` documenta el header `Retry-After`. Todas como `application/problem+json` con los schemas `Problem` y `ValidationProblem`. Los schemas se registran en el customizer porque springdoc reemplaza los declarados en el bean `OpenAPI`; el test lo detectó como `$ref` colgantes.
+- **Servida y versionada:** el servicio la sirve en `/v3/api-docs` (JSON) y `/v3/api-docs.yaml`, en el puerto de la API, porque es documentación para los clientes y no información operativa (ADR-012). Se puede apagar con `OPENAPI_ENABLED=false`. Además se commitea en `docs/openapi.yaml`, así los cambios de contrato aparecen en el diff de cada PR. Un test compara el archivo con lo generado y falla si difieren; `-Dopenapi.update=true` lo regenera. Para que la salida sea estable, las claves se ordenan (`writer-with-order-by-keys`) y el server es fijo (`http://localhost:8080`), no el host que la generó.
+- Solo se documenta `/api/**`. Actuator queda afuera, además de vivir en otro puerto.
+
+**Alternativas consideradas:**
+- **Spec escrita a mano (design-first) + validación contra la implementación:** mejor cuando varios equipos acuerdan el contrato antes de implementarlo. Acá hay un solo servicio y la validación ya está en el código, así que escribirla a mano sería duplicar y arriesgar que diverja.
+- **Swagger UI (`-starter-webmvc-ui`):** suma assets web al servicio y una superficie más para exponer y mantener. El YAML commiteado se puede abrir en cualquier visor (el editor de Swagger, la vista de GitHub, el IDE).
+- **Generar el archivo en el build (plugin de Maven que levanta la app):** necesita la base de datos durante `package` y agrega un plugin. Un test que ya levanta el contexto contra Postgres cubre lo mismo.
+
+**Cómo se probó:**
+- `OpenApiSpecTest` (6 tests), con requests HTTP reales:
+  - el documento es OpenAPI 3.1 con `info.version` `v1`;
+  - están exactamente las operaciones de v1;
+  - `SensorReadingRequest` tiene los campos requeridos y los patterns de la validación;
+  - el `PATCH` tiene `minimum: 0` en `s` y `minProperties: 1`;
+  - la respuesta de config requiere `m` y `s`;
+  - `400`, `415`, `500` y `503` son `application/problem+json`, `400` incluye `errors` y `503` tiene `Retry-After`;
+  - `docs/openapi.yaml` coincide con lo generado.
+
+  Primero fallaron todos con 404, porque no se servía ninguna spec. Después fallaron el de errores y el de drift, por los schemas perdidos.
+- Se comprobó que el test de drift falla si se edita `docs/openapi.yaml` a mano.
+- El `400` real de la API coincide con el schema `ValidationProblem` (`status`, `title`, `detail`, `instance` y `errors[{field, message}]`).
+- Manual con `docker compose`:
+  - el YAML servido es idéntico al commiteado;
+  - `/v3/api-docs` no existe en el puerto de management;
+  - con `OPENAPI_ENABLED=false` responde 404.
+- CI: el smoke test de la imagen también pide `/v3/api-docs`.
+
+**Consecuencias:**
+- 102 tests en total (6 nuevos).
+- Cambiar la API obliga a regenerar `docs/openapi.yaml` en el mismo PR, que es justamente lo buscado.
+- springdoc queda como dependencia de producción y Dependabot lo actualiza. Una actualización que cambie cómo se genera el YAML va a hacer fallar el test de drift, y hay que regenerar el archivo en ese PR.
 
 ---
 
