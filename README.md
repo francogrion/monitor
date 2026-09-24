@@ -78,6 +78,35 @@ Business metrics, besides the JVM/HTTP/DB-pool ones Spring Boot provides:
 | `monitor_aggregation_batch_size_{count,sum,max}` | readings aggregated per cycle; `_count` is the number of cycles actually processed |
 | `tasks_scheduled_execution_seconds{code_function="processData"}` | duration and outcome of each aggregation run (provided by Spring). It also counts runs skipped because another instance held the lock |
 
+# Running on Kubernetes
+
+Kustomize manifests live in [`deploy/kubernetes`](deploy/kubernetes) (see [ARCHITECTURE.md](ARCHITECTURE.md) ADR-014):
+- `base/`: the service. Includes a Deployment with 2 replicas, a Service `monitor` for the API and a Service
+  `monitor-management` for actuator/Prometheus, which must stay internal. It also includes a PodDisruptionBudget and
+  a ConfigMap generated from `config.env`, so changing a value rolls the pods.
+  - Probes run on the management port.
+  - The pods run as non-root with a read-only filesystem.
+  - DB credentials come from a Secret named `monitor-db` with keys `username` and `password`.
+- `overlays/local/`: a self-contained environment for kind, minikube or Docker Desktop. It adds a namespace that
+  enforces the `restricted` Pod Security Standard, an ephemeral Postgres and dev credentials.
+
+Try it on a local cluster:
+```
+	kind create cluster
+	docker build -t monitor:latest . && kind load docker-image monitor:latest
+	kubectl apply -k deploy/kubernetes/overlays/local
+	kubectl -n monitor rollout status deployment/monitor
+	kubectl -n monitor port-forward service/monitor 8080:80
+```
+For a real environment, create an overlay on top of `base/` that sets:
+- the image, with `images:` (`newName`/`newTag`);
+- `DB_URL`, with `configMapGenerator` using `behavior: merge`;
+- how traffic reaches the Service `monitor` (Ingress or Gateway).
+
+Create the Secret outside the repository, for example
+`kubectl create secret generic monitor-db --from-literal=username=... --from-literal=password=...`. The pods restart
+once or twice if they start before the database is reachable, since the service fails fast without it.
+
 # Steps to run the server without Docker
 
 Requires **JDK 25** and a **PostgreSQL** instance (config constants and pending sensor
@@ -122,11 +151,15 @@ for the repository integration tests (`@DataJpaTest` against a real Postgres, no
 # Continuous integration
 
 GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on every pull request and on
-pushes to `master`, with two jobs in parallel:
+pushes to `master`, with three jobs in parallel:
 - **Build and test:** `mvn verify` on JDK 25 against a Postgres 16 service container.
 - **Docker image smoke test:** builds the image with `docker compose up --build --wait` (which waits for the
   image's health check), checks readiness on the actuator port and that actuator is not reachable on the API
   port, and calls the API.
+- **Kubernetes manifests:**
+  - validates both kustomizations against the Kubernetes schemas (kubeconform, strict);
+  - deploys `overlays/local` on a kind cluster, whose namespace enforces the `restricted` Pod Security Standard;
+  - waits for the rollout and calls the API through the Services.
 
 Dependabot ([`.github/dependabot.yml`](.github/dependabot.yml)) opens weekly PRs to update Maven
 dependencies and the GitHub Actions, which are pinned to commit SHAs. The Docker base images are not

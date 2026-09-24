@@ -1,0 +1,10 @@
+# Node drains and cluster upgrades keep at least one instance serving
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: monitor
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: monitor

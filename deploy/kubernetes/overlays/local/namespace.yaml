@@ -1,0 +1,9 @@
+# "restricted" Pod Security Standard: the API server rejects any pod that isn't non-root, without privilege
+# escalation, capabilities dropped and seccomp enabled; deploying here checks the base's securityContext
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitor
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest

@@ -11,13 +11,14 @@ RUN --mount=type=cache,target=/root/.m2 mvn -B -q -DskipTests package \
  && mv target/extracted/application/*.jar target/extracted/application/app.jar
 
 FROM eclipse-temurin:25-jre
-RUN groupadd --system app && useradd --system --gid app --no-create-home app
+# Fixed numeric uid/gid: Kubernetes can only enforce runAsNonRoot when USER is numeric
+RUN groupadd --system --gid 10001 app && useradd --system --uid 10001 --gid app --no-create-home app
 WORKDIR /app
 # One layer per change frequency: dependencies rarely change, application classes change on every build
 COPY --from=build /workspace/target/extracted/dependencies/ ./
 COPY --from=build /workspace/target/extracted/snapshot-dependencies/ ./
 COPY --from=build /workspace/target/extracted/application/ ./
-USER app
+USER 10001:10001
 # JSON (ECS) logs in containers, for log aggregators; set LOGGING_STRUCTURED_FORMAT_CONSOLE= for plain text
 ENV SERVER_PORT=8080 \
     MANAGEMENT_SERVER_PORT=9090 \

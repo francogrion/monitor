@@ -90,3 +90,71 @@ jobs:
       - name: Stop the stack
         if: always()
         run: docker compose down --volumes
+
+  kubernetes:
+    name: Kubernetes manifests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # kubectl and kind come preinstalled on the GitHub-hosted runner
+      - name: Show tool versions
+        run: |
+          kubectl version --client
+          kind version
+
+      - name: Validate the manifests against the Kubernetes schemas
+        run: |
+          for dir in base overlays/local; do
+            kubectl kustomize "deploy/kubernetes/$dir"
+            echo ---
+          done | docker run --rm -i \
+            ghcr.io/yannh/kubeconform:v0.8.0@sha256:faffaf43f95aa6425306e1ab8d6fcad72acb9049158f38e574c085ea1ec0f64e \
+            -strict -summary -kubernetes-version 1.37.0
+
+      - name: Create a kind cluster
+        run: kind create cluster --name monitor --wait 120s
+
+      - name: Build the image and load it into the cluster
+        run: |
+          docker build -t monitor:latest .
+          kind load docker-image monitor:latest --name monitor
+
+      # The namespace enforces the "restricted" Pod Security Standard, so this also checks the securityContext.
+      # The service may restart once or twice while Postgres starts: it fails fast without a database
+      - name: Deploy the local overlay
+        run: |
+          kubectl apply -k deploy/kubernetes/overlays/local
+          kubectl -n monitor rollout status deployment/postgres --timeout=180s
+          kubectl -n monitor rollout status deployment/monitor --timeout=300s
+
+      - name: Smoke test through the Services
+        run: |
+          kubectl -n monitor port-forward service/monitor 8080:80 > /dev/null &
+          kubectl -n monitor port-forward service/monitor-management 9090:9090 > /dev/null &
+          for _ in $(seq 1 30); do
+            curl -sf localhost:9090/actuator/health/readiness > /dev/null && break
+            sleep 1
+          done
+          curl --fail-with-body -sS localhost:9090/actuator/health/readiness
+          echo
+          curl --fail-with-body -sS -X PATCH localhost:8080/api/v1/config \
+            -H 'Content-Type: application/json' -d '{"m":25,"s":34}'
+          echo
+          status=$(curl -sS -o /dev/null -w '%{http_code}' -X POST localhost:8080/api/v1/monitor/data \
+            -H 'Content-Type: application/json' \
+            -d '{"sensorId":"k8s","data":1.5,"timestamp":"2026-01-01T00:00:00"}')
+          echo "POST /api/v1/monitor/data -> $status"
+          test "$status" = 202
+
+      - name: Show cluster state
+        if: failure()
+        run: |
+          kubectl -n monitor get all,events
+          kubectl -n monitor describe pods
+          kubectl -n monitor logs deployment/monitor --all-containers --tail=200 || true
+
+      - name: Delete the cluster
+        if: always()
+        run: kind delete cluster --name monitor

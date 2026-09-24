@@ -1,0 +1,12 @@
+# Actuator (Prometheus scraping). Internal only: never expose it through an Ingress/Gateway (ADR-012)
+apiVersion: v1
+kind: Service
+metadata:
+  name: monitor-management
+spec:
+  selector:
+    app.kubernetes.io/name: monitor
+  ports:
+    - name: management
+      port: 9090
+      targetPort: management

@@ -1,0 +1,12 @@
+# The API. Point the Ingress/Gateway at this Service; it deliberately doesn't route to the management port
+apiVersion: v1
+kind: Service
+metadata:
+  name: monitor
+spec:
+  selector:
+    app.kubernetes.io/name: monitor
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
