@@ -51,8 +51,8 @@ Basado en el análisis de arquitectura (ver `ARCHITECTURE.md`). Estado: `[ ]` pe
 - [x] Externalizar puerto, valores iniciales de `M`/`S`, y demás configuración vía `application.yml` / variables de entorno (ver ADR-005 y la tabla en `README.md`)
 
 ### Fase 4 — Empaquetado y despliegue
-- [ ] Dockerfile
-- [ ] Health check (`/actuator/health`)
+- [x] Dockerfile (+ `docker-compose.yml` con Postgres, ver ADR-006)
+- [x] Health check (`/actuator/health`, con probes de liveness/readiness)
 
 ### Fase 5 — Observabilidad y resiliencia
 - [ ] Logging estructurado

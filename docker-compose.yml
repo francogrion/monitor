@@ -1,0 +1,35 @@
+# Local stack: Postgres + the monitor service.
+#   docker compose up --build                  one instance on http://localhost:8080
+#   docker compose up --build --scale app=2    two instances on ports 8080-8081, sharing the DB
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: monitor
+      POSTGRES_USER: monitor
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-monitor}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U monitor -d monitor"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    build: .
+    image: monitor:latest
+    environment:
+      DB_URL: jdbc:postgresql://db:5432/monitor
+      DB_USERNAME: monitor
+      DB_PASSWORD: ${DB_PASSWORD:-monitor}
+      MONITOR_DEFAULT_M: ${MONITOR_DEFAULT_M:-0}
+      MONITOR_DEFAULT_S: ${MONITOR_DEFAULT_S:-0}
+    ports:
+      - "8080-8081:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  db-data:
