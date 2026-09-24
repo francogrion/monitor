@@ -8,8 +8,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
+import java.time.Instant;
 import java.util.concurrent.ThreadLocalRandom;
 
 import static com.utils.JsonUtils.dataToJson;
@@ -40,7 +39,7 @@ public class RestClient {
     }
 
     private static void sendConfig(HttpClient httpClient, String json) throws Exception {
-        HttpRequest request = HttpRequest.newBuilder(URI.create(BASE_URL + "/api/v1/config"))
+        HttpRequest request = HttpRequest.newBuilder(URI.create(BASE_URL + "/api/v2/config"))
                 .header("Content-Type", "application/json")
                 .method("PATCH", HttpRequest.BodyPublishers.ofString(json))
                 .build();
@@ -52,7 +51,7 @@ public class RestClient {
 class ClientThread extends Thread {
 
     private static final Logger log = LoggerFactory.getLogger(ClientThread.class);
-    private static final String MONITOR_DATA_URL = RestClient.BASE_URL + "/api/v1/monitor/data";
+    private static final String MONITOR_DATA_URL = RestClient.BASE_URL + "/api/v2/monitor/data";
 
     private final SensorData sensorData;
     private final HttpClient httpClient = HttpClient.newHttpClient();
@@ -75,7 +74,8 @@ class ClientThread extends Thread {
                 //simulate two readings per second
                 sleep(500);
                 sensorData.setData(ThreadLocalRandom.current().nextDouble() * 100);
-                sensorData.setTimestamp(LocalDateTime.now().format(DateTimeFormatter.ISO_DATE_TIME));
+                // v2 requires an offset; Instant always prints in UTC (...Z)
+                sensorData.setTimestamp(Instant.now().toString());
 
                 HttpRequest request = HttpRequest.newBuilder(URI.create(MONITOR_DATA_URL))
                         .header("Content-Type", "application/json")

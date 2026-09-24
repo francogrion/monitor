@@ -15,14 +15,16 @@ import io.swagger.v3.oas.models.media.StringSchema;
 import io.swagger.v3.oas.models.responses.ApiResponse;
 import io.swagger.v3.oas.models.responses.ApiResponses;
 import io.swagger.v3.oas.models.servers.Server;
-import org.springdoc.core.customizers.OpenApiCustomizer;
+import org.springdoc.core.models.GroupedOpenApi;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import java.util.List;
 import java.util.Map;
 
-// Error responses come from ApiExceptionHandler, which springdoc can't see per operation, so they are added here
+// One document per API version (/v3/api-docs/v1, /v3/api-docs/v2), so adding a version leaves the previous
+// contracts untouched. Error responses come from ApiExceptionHandler, which springdoc can't see per operation,
+// so they are added here
 @Configuration
 public class OpenApiConfig {
 
@@ -33,27 +35,45 @@ public class OpenApiConfig {
     @Bean
     OpenAPI monitorOpenApi() {
         return new OpenAPI()
-                .info(new Info()
-                        .title("Monitor API")
-                        .version("v1")
-                        .description("Receives sensor readings and manages the constants M and S used to detect anomalies. "
-                                + "Readings are aggregated every 30 seconds; anomalies are reported in the service logs and metrics."))
-                // Fixed, so the committed docs/openapi.yaml doesn't depend on the host that generated it
+                // Fixed, so the committed docs/openapi-*.yaml don't depend on the host that generated them
                 .servers(List.of(new Server().url("http://localhost:8080").description("Local (docker compose)")));
     }
 
-    // Runs after springdoc has built the schemas from the code; schemas declared on the OpenAPI bean would be replaced
     @Bean
-    OpenApiCustomizer problemResponsesCustomizer() {
-        return openApi -> {
-            if (openApi.getComponents() == null) {
-                openApi.setComponents(new Components());
-            }
-            openApi.getComponents()
-                    .addSchemas(PROBLEM, problemSchema())
-                    .addSchemas(VALIDATION_PROBLEM, validationProblemSchema());
-            openApi.getPaths().values().forEach(path -> path.readOperations().forEach(this::addProblemResponses));
-        };
+    GroupedOpenApi v1Api() {
+        return versionGroup("v1");
+    }
+
+    @Bean
+    GroupedOpenApi v2Api() {
+        return versionGroup("v2");
+    }
+
+    // The customizer runs after springdoc has built the schemas from the code; schemas declared on the OpenAPI bean
+    // would be replaced
+    private GroupedOpenApi versionGroup(String version) {
+        return GroupedOpenApi.builder()
+                .group(version)
+                .pathsToMatch("/api/" + version + "/**")
+                .addOpenApiCustomizer(openApi -> {
+                    openApi.setInfo(info(version));
+                    if (openApi.getComponents() == null) {
+                        openApi.setComponents(new Components());
+                    }
+                    openApi.getComponents()
+                            .addSchemas(PROBLEM, problemSchema())
+                            .addSchemas(VALIDATION_PROBLEM, validationProblemSchema());
+                    openApi.getPaths().values().forEach(path -> path.readOperations().forEach(this::addProblemResponses));
+                })
+                .build();
+    }
+
+    private static Info info(String version) {
+        return new Info()
+                .title("Monitor API")
+                .version(version)
+                .description("Receives sensor readings and manages the constants M and S used to detect anomalies. "
+                        + "Readings are aggregated every 30 seconds; anomalies are reported in the service logs and metrics.");
     }
 
     private void addProblemResponses(Operation operation) {

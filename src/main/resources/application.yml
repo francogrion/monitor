@@ -38,11 +38,13 @@ management:
         readiness:
           include: readinessState, db
 
-# OpenAPI document of the API at /v3/api-docs (JSON) and /v3/api-docs.yaml; committed copy in docs/openapi.yaml
+# One OpenAPI document per API version (groups in OpenApiConfig): /v3/api-docs/v1 (JSON) and /v3/api-docs.yaml/v1,
+# same for v2; committed copies in docs/openapi-<version>.yaml
 springdoc:
   api-docs:
     enabled: ${OPENAPI_ENABLED:true}
-  paths-to-match: /api/**
+  # No ungrouped /v3/api-docs: it would mix the versions and miss the error responses added per group
+  enable-default-api-docs: false
   default-produces-media-type: application/json
   writer-with-order-by-keys: true
 

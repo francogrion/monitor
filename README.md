@@ -184,7 +184,7 @@ Everything is configured through environment variables (defaults in `src/main/re
 | `MONITOR_LOCK_AT_LEAST_FOR` | `PT20S` | Minimum time the aggregation lock is held (absorbs clock skew between instances) |
 | `MONITOR_LOCK_AT_MOST_FOR` | `PT29S` | Maximum time the lock is held if the holder dies mid-run |
 | `MONITOR_SCHEDULING_ENABLED` | `true` | Set to `false` to disable scheduled aggregation on an instance |
-| `OPENAPI_ENABLED` | `true` | Serve the OpenAPI document at `/v3/api-docs`; `false` returns `404` |
+| `OPENAPI_ENABLED` | `true` | Serve the OpenAPI documents at `/v3/api-docs/v1` and `/v3/api-docs/v2`; `false` returns `404` |
 | `LOGGING_STRUCTURED_FORMAT_CONSOLE` | unset (`ecs` in the Docker image) | JSON log format: `ecs`, `logstash` or `gelf`; unset for plain text |
 
 When changing the cron, keep `MONITOR_LOCK_AT_LEAST_FOR` ≤ `MONITOR_LOCK_AT_MOST_FOR` < interval between slots;
@@ -194,50 +194,62 @@ at startup and refuses to start, naming the offending property, when it doesn't 
 `M`/`S` defaults only apply while nothing is persisted: once a value is set via the API it is stored in the
 database and always wins, even after a restart with different defaults.
 
-The console test client targets `MONITOR_BASE_URL` (default `http://localhost:8080`):
+The console test client uses API v2 and targets `MONITOR_BASE_URL` (default `http://localhost:8080`):
 ```
 	MONITOR_BASE_URL=http://localhost:8090 mvn exec:java@client
 ```
 
-# API (v1)
+# API
 
-All endpoints live under `/api/v1`. The unversioned paths of earlier versions (`/monitor/data`, `/config/m/{m}`,
-...) were removed; see [ARCHITECTURE.md](ARCHITECTURE.md) ADR-008.
+Two versions are served side by side, and both work against the same data:
+- **v2 (`/api/v2`)**, recommended. It requires `timestamp` to be an ISO-8601 date-time with a UTC offset, and stores
+  and returns it in UTC. See [ARCHITECTURE.md](ARCHITECTURE.md) ADR-015.
+- **v1 (`/api/v1`)**. It accepts `timestamp` as free text (a limited character set) and stores it as sent.
 
-The OpenAPI 3.1 specification is committed in [`docs/openapi.yaml`](docs/openapi.yaml) and also served by the
-service at `/v3/api-docs` (JSON) and `/v3/api-docs.yaml`, on the API port. Load either into any OpenAPI viewer or
-client generator. The committed file is generated from the code, and a test fails when they drift apart; after
-changing the API, regenerate it with:
+The rest is identical in both versions. The unversioned paths of earlier releases (`/monitor/data`,
+`/config/m/{m}`, ...) were removed; see ADR-008.
+
+Each version has its own OpenAPI 3.1 specification:
+- committed in [`docs/openapi-v1.yaml`](docs/openapi-v1.yaml) and [`docs/openapi-v2.yaml`](docs/openapi-v2.yaml);
+- also served by the service, on the API port, at `/v3/api-docs/v1` (JSON) and `/v3/api-docs.yaml/v1`, and likewise
+  for `v2`.
+
+Load any of them into an OpenAPI viewer or a client generator. The committed files are generated from the code,
+and a test fails when they drift apart. After changing the API, regenerate them with:
 ```
 	mvn test -Dtest=OpenApiSpecTest -Dopenapi.update=true
 ```
 
+The examples below use v2. For v1, replace `v2` with `v1` in the path.
+
 ## Send a sensor reading
 
-`POST /api/v1/monitor/data` → `202 Accepted` (the reading is stored and aggregated in the next cycle)
+`POST /api/v2/monitor/data` → `202 Accepted`. The reading is stored and aggregated in the next cycle; the response
+echoes it with the timestamp in UTC.
 ```JSON
 {
 	"sensorId": "sensor-2",
 	"data": 33.54,
-	"timestamp": "2026-09-24T08:12:49.515"
+	"timestamp": "2026-09-24T08:12:49.515-03:00"
 }
 ```
 | Field | Rules |
 |---|---|
 | `sensorId` | required, 1-64 letters, digits, `.`, `_` or `-` |
 | `data` | required, number |
-| `timestamp` | required, 1-64 characters of a date-time: digits, letters, `:`, `.`, `+`, `-` |
+| `timestamp` | v2: required, ISO-8601 date-time with offset (`Z` or `±hh:mm`), e.g. `2026-09-24T11:12:49.515Z`. Returned and stored in UTC. A timestamp without offset, an impossible date or a number is rejected with `400` naming the field |
+| | v1: required, 1-64 characters of a date-time: digits, letters, `:`, `.`, `+`, `-`. Stored as sent |
 
 ## Read the constants
 
-`GET /api/v1/config` → `200`
+`GET /api/v2/config` → `200`
 ```JSON
 { "m": 25.0, "s": 34.0 }
 ```
 
 ## Update the constants
 
-`PATCH /api/v1/config` → `200` with the resulting constants. Send one or both; a missing one stays unchanged.
+`PATCH /api/v2/config` → `200` with the resulting constants. Send one or both; a missing one stays unchanged.
 ```JSON
 { "m": 25, "s": 34 }
 ```
@@ -257,7 +269,7 @@ Errors use [RFC 9457 Problem Details](https://www.rfc-editor.org/rfc/rfc9457) (`
 ```
 | Status | When |
 |---|---|
-| `400` | invalid body: missing/invalid fields (listed in `errors`), malformed JSON, wrong types |
+| `400` | invalid body: missing/invalid fields and values of the wrong type or format (listed in `errors`), malformed JSON |
 | `404` | unknown path |
 | `415` | body is not `application/json` |
 | `503` | the database is unavailable; retry after the `Retry-After` header (seconds) |
