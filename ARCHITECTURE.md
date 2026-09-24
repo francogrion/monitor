@@ -354,7 +354,7 @@ Hasta ahora los tests se corrían solo a mano. Nada impedía mergear un PR que r
 - **Job `test`:** `mvn verify` con JDK 25 (Temurin) contra un **Postgres 16 como service container**, con las mismas credenciales y base que usan los tests en local (`application-test.yml`), así los tests no necesitan cambios. Si fallan, se suben los reportes de Surefire como artifact.
 - **Job `docker`:** `docker compose up --build --wait` construye la imagen con el Dockerfile real, levanta Postgres + el servicio y espera a que el `HEALTHCHECK` (readiness) dé healthy. Después un smoke test llama a la API: readiness `UP`, `PATCH` de la config y `POST` de una lectura esperando `202`. Valida de punta a punta la imagen, el compose, las migraciones y el wiring. Corre en paralelo con `test`, para tener feedback más rápido.
 - **Acciones fijadas por SHA de commit**, con la versión en un comentario (`actions/checkout@3d3c42e… # v7.0.1`). Un tag se puede mover y un SHA no: es la recomendación de GitHub para no ejecutar código de terceros que cambió sin aviso.
-- **Dependabot** (`.github/dependabot.yml`), semanal para `github-actions`, `maven` y `docker`. Sin él, los SHAs fijados y las dependencias quedan congelados.
+- **Dependabot** (`.github/dependabot.yml`), semanal para `github-actions`, `maven` y `docker`. Sin él, los SHAs fijados y las dependencias quedan congelados. *(El ecosistema `docker` se quitó después; ver ADR-010.)*
 - `permissions: contents: read` (mínimo privilegio para el token del workflow) y `concurrency`, que cancela la corrida anterior de un PR ante un push nuevo pero nunca las de `master`.
 
 **Testcontainers (evaluado, postergado):** harían los tests autosuficientes (no hace falta un Postgres local) a costa de requerir Docker en cada máquina que corra los tests y agregar dependencias y tiempo de arranque. Con el service container, CI ya corre contra un Postgres real sin tocar los tests. Se reconsidera si configurar el Postgres local se vuelve una fricción real para quien desarrolla.
@@ -369,6 +369,34 @@ Hasta ahora los tests se corrían solo a mano. Nada impedía mergear un PR que r
 **Consecuencias:**
 - Para que el CI **bloquee** merges hay que marcar los checks como obligatorios en la protección de la rama `master` (Settings → Branches), que es configuración del repo, no código.
 - El job `docker` descarga las dependencias Maven en cada corrida (el cache de BuildKit no persiste entre runners). Si se vuelve lento, se puede cachear con `docker/build-push-action` y el cache de GitHub Actions.
+
+---
+
+### ADR-010: Dependabot sin el ecosistema `docker`; los cambios de JDK son deliberados
+
+**Estado:** Aceptada. Modifica ADR-009.
+
+**Contexto:**
+En su primera corrida, Dependabot propuso cambiar la imagen de build de `maven:3.9-eclipse-temurin-25` a `maven:3-eclipse-temurin-26` (francogrion/monitor#20). El CI pasó, pero el cambio no es deseable:
+- Movía la etapa de build de JDK 25 (LTS, ADR-001) a JDK 26, que no es LTS y deja de recibir actualizaciones públicas cuando sale JDK 27 (septiembre de 2026, según el calendario de OpenJDK).
+- Solo cambiaba la etapa de build: el runtime (`eclipse-temurin:25-jre`), el CI (`setup-java` 25) y el `pom.xml` (`java.version` 25) quedaban en 25. Funcionaba únicamente porque el compilador genera bytecode para 25.
+- Aflojaba el tag de `3.9` a `3`, que acepta cualquier Maven 3.x futuro.
+
+Además, con los tags que usa el Dockerfile (`25-jre`, `3.9-eclipse-temurin-25`), los parches del JDK 25 y de Maven 3.9 ya llegan solos en cada rebuild. La entrada `docker` de Dependabot casi solo iba a producir propuestas de cambio de JDK como esta.
+
+**Decisión:**
+- Se quita el ecosistema `docker` de `dependabot.yml`. Se mantienen `github-actions` y `maven`.
+- **Cambiar de JDK es una decisión explícita**, con su propio ADR, y se hace en un único cambio que actualiza juntos:
+  - las dos imágenes del `Dockerfile` (build y runtime);
+  - `java.version` en el `pom.xml`;
+  - `java-version` en `.github/workflows/ci.yml`;
+  - el requisito de JDK en el `README.md`.
+
+**Alternativa considerada:** fijar las imágenes por digest (`@sha256:…`), para que Dependabot proponga como PRs los parches de seguridad de la imagen base, e ignorar los cambios de versión de JDK. Da builds reproducibles y un aviso explícito de cada parche, a costa de más PRs y de una regla de exclusión que habría que validar contra cómo interpreta Dependabot estos tags. Queda como mejora si se necesitan builds bit a bit reproducibles.
+
+**Consecuencias:**
+- Nadie avisa si la imagen base publica un parche; se incorpora en el próximo rebuild (el CI reconstruye la imagen en cada PR).
+- francogrion/monitor#20 se cerró sin mergear.
 
 ---
 
