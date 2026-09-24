@@ -40,7 +40,7 @@ monitor:
   defaults:
     m: ${MONITOR_DEFAULT_M:0}
     s: ${MONITOR_DEFAULT_S:0}
-  # Invariant: lock-at-least-for <= lock-at-most-for < interval between cron slots
+  # Invariant, checked at startup (AggregationProperties): lock-at-least-for <= lock-at-most-for < interval between cron slots
   aggregation:
     cron: ${MONITOR_AGGREGATION_CRON:0,30 * * * * *}
     lock-at-least-for: ${MONITOR_LOCK_AT_LEAST_FOR:PT20S}
