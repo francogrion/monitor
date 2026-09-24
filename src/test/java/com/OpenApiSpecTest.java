@@ -22,7 +22,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-// The OpenAPI document is generated from the code; docs/openapi.yaml is the committed, reviewable copy
+// One OpenAPI document per API version, generated from the code; docs/openapi-<version>.yaml are the committed,
+// reviewable copies. Adding a version must not change the documents of the previous ones
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
         "monitor.scheduling.enabled=false",
         "management.server.port=0"
@@ -30,8 +31,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @ActiveProfiles("test")
 class OpenApiSpecTest {
 
-    // mvn test -Dtest=OpenApiSpecTest -Dopenapi.update=true rewrites docs/openapi.yaml from the code
-    static final Path COMMITTED_SPEC = Path.of("docs/openapi.yaml");
+    // mvn test -Dtest=OpenApiSpecTest -Dopenapi.update=true rewrites docs/openapi-<version>.yaml from the code
+    private static final List<String> VERSIONS = List.of("v1", "v2");
 
     private static final String PROBLEM_JSON = "application/problem+json";
 
@@ -41,26 +42,51 @@ class OpenApiSpecTest {
     private int apiPort;
 
     @Test
-    void shouldServeAnOpenApi31DocumentForV1() throws Exception {
-        JsonNode spec = spec();
+    void shouldServeAnOpenApi31DocumentPerVersion() throws Exception {
+        for (String version : VERSIONS) {
+            JsonNode spec = spec(version);
 
-        assertTrue(spec.path("openapi").asString().startsWith("3.1"), spec.path("openapi").asString());
-        assertEquals("v1", spec.path("info").path("version").asString());
-        assertFalse(spec.path("info").path("title").asString().isBlank());
+            assertTrue(spec.path("openapi").asString().startsWith("3.1"), spec.path("openapi").asString());
+            assertEquals(version, spec.path("info").path("version").asString());
+            assertFalse(spec.path("info").path("title").asString().isBlank());
+        }
     }
 
     @Test
-    void shouldDocumentExactlyTheV1Endpoints() throws Exception {
-        JsonNode paths = spec().path("paths");
+    void shouldDocumentExactlyTheEndpointsOfEachVersion() throws Exception {
+        for (String version : VERSIONS) {
+            JsonNode paths = spec(version).path("paths");
+            String base = "/api/" + version;
 
-        assertEquals(Set.of("/api/v1/monitor/data", "/api/v1/config"), Set.copyOf(paths.propertyNames()));
-        assertEquals(Set.of("post"), Set.copyOf(paths.path("/api/v1/monitor/data").propertyNames()));
-        assertEquals(Set.of("get", "patch"), Set.copyOf(paths.path("/api/v1/config").propertyNames()));
+            assertEquals(Set.of(base + "/monitor/data", base + "/config"), Set.copyOf(paths.propertyNames()), version);
+            assertEquals(Set.of("post"), Set.copyOf(paths.path(base + "/monitor/data").propertyNames()));
+            assertEquals(Set.of("get", "patch"), Set.copyOf(paths.path(base + "/config").propertyNames()));
+        }
+    }
+
+    // Only the per-version documents exist: an ungrouped one would mix versions and lack the error responses
+    @Test
+    void shouldNotServeAnUngroupedDocument() throws Exception {
+        assertEquals(404, get("/v3/api-docs").statusCode());
+        assertEquals(404, get("/v3/api-docs.yaml").statusCode());
+    }
+
+    @Test
+    void shouldDocumentTheV2TimestampAsADateTime() throws Exception {
+        JsonNode spec = spec("v2");
+        JsonNode post = spec.path("paths").path("/api/v2/monitor/data").path("post");
+
+        assertEquals(Set.of("202", "400", "415", "500", "503"), responseCodes(post));
+        JsonNode reading = schema(spec, post.path("requestBody").path("content").path("application/json").path("schema"));
+        assertEquals(List.of("data", "sensorId", "timestamp"), sorted(reading.path("required")));
+        assertEquals("string", reading.path("properties").path("timestamp").path("type").asString());
+        assertEquals("date-time", reading.path("properties").path("timestamp").path("format").asString());
+        assertEquals("[A-Za-z0-9._-]{1,64}", reading.path("properties").path("sensorId").path("pattern").asString());
     }
 
     @Test
     void shouldDocumentSensorReadingWithItsValidationRules() throws Exception {
-        JsonNode spec = spec();
+        JsonNode spec = spec("v1");
         JsonNode post = spec.path("paths").path("/api/v1/monitor/data").path("post");
 
         assertEquals(Set.of("202", "400", "415", "500", "503"), responseCodes(post));
@@ -72,7 +98,7 @@ class OpenApiSpecTest {
 
     @Test
     void shouldDocumentConfigReadAndPartialUpdate() throws Exception {
-        JsonNode spec = spec();
+        JsonNode spec = spec("v1");
         JsonNode get = spec.path("paths").path("/api/v1/config").path("get");
         JsonNode patch = spec.path("paths").path("/api/v1/config").path("patch");
 
@@ -88,32 +114,38 @@ class OpenApiSpecTest {
 
     @Test
     void shouldDocumentErrorsAsProblemDetails() throws Exception {
-        JsonNode spec = spec();
-        JsonNode post = spec.path("paths").path("/api/v1/monitor/data").path("post");
+        for (String version : VERSIONS) {
+            JsonNode spec = spec(version);
+            JsonNode post = spec.path("paths").path("/api/" + version + "/monitor/data").path("post");
 
-        for (String code : List.of("400", "415", "500", "503")) {
-            JsonNode content = post.path("responses").path(code).path("content");
-            assertEquals(Set.of(PROBLEM_JSON), Set.copyOf(content.propertyNames()), "response " + code);
+            for (String code : List.of("400", "415", "500", "503")) {
+                JsonNode content = post.path("responses").path(code).path("content");
+                assertEquals(Set.of(PROBLEM_JSON), Set.copyOf(content.propertyNames()), version + " response " + code);
+            }
+            JsonNode validationProblem = schema(spec, post.path("responses").path("400").path("content").path(PROBLEM_JSON).path("schema"));
+            assertTrue(validationProblem.toString().contains("\"errors\""), validationProblem.toString());
+            assertTrue(post.path("responses").path("503").path("headers").has("Retry-After"));
         }
-        JsonNode validationProblem = schema(spec, post.path("responses").path("400").path("content").path(PROBLEM_JSON).path("schema"));
-        assertTrue(validationProblem.toString().contains("\"errors\""), validationProblem.toString());
-        assertTrue(post.path("responses").path("503").path("headers").has("Retry-After"));
     }
 
     @Test
-    void shouldMatchTheCommittedSpec() throws Exception {
-        String generated = get("/v3/api-docs.yaml").body();
-        if (Boolean.getBoolean("openapi.update")) {
-            Files.writeString(COMMITTED_SPEC, generated);
-        }
+    void shouldMatchTheCommittedSpecs() throws Exception {
+        for (String version : VERSIONS) {
+            Path committed = Path.of("docs/openapi-" + version + ".yaml");
+            HttpResponse<String> response = get("/v3/api-docs.yaml/" + version);
+            assertEquals(200, response.statusCode(), response.body());
+            if (Boolean.getBoolean("openapi.update")) {
+                Files.writeString(committed, response.body());
+            }
 
-        assertTrue(Files.exists(COMMITTED_SPEC), COMMITTED_SPEC + " is missing; generate it with -Dopenapi.update=true");
-        assertEquals(Files.readString(COMMITTED_SPEC), generated,
-                COMMITTED_SPEC + " is out of date; regenerate it with mvn test -Dtest=OpenApiSpecTest -Dopenapi.update=true");
+            assertTrue(Files.exists(committed), committed + " is missing; generate it with -Dopenapi.update=true");
+            assertEquals(Files.readString(committed), response.body(),
+                    committed + " is out of date; regenerate it with mvn test -Dtest=OpenApiSpecTest -Dopenapi.update=true");
+        }
     }
 
-    private JsonNode spec() throws IOException, InterruptedException {
-        HttpResponse<String> response = get("/v3/api-docs");
+    private JsonNode spec(String version) throws IOException, InterruptedException {
+        HttpResponse<String> response = get("/v3/api-docs/" + version);
         assertEquals(200, response.statusCode(), response.body());
         return JsonMapper.builder().build().readTree(response.body());
     }

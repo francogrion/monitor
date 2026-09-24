@@ -9,13 +9,16 @@ import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.transaction.CannotCreateTransactionException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.WebRequest;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
+import tools.jackson.databind.exc.MismatchedInputException;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 
@@ -38,6 +41,32 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
                 .toList();
         problem.setProperty("errors", errors);
         return handleExceptionInternal(ex, problem, headers, status, request);
+    }
+
+    // A value of the wrong type or format (a text in a number, a date without offset) names the field like a
+    // validation error; malformed JSON has no field to name
+    @Override
+    protected ResponseEntity<Object> handleHttpMessageNotReadable(HttpMessageNotReadableException ex,
+                                                                  HttpHeaders headers,
+                                                                  HttpStatusCode status,
+                                                                  WebRequest request) {
+        ProblemDetail problem = createProblemDetail(ex, status, "Failed to read request", null, null, request);
+        if (ex.getCause() instanceof MismatchedInputException invalid && !invalid.getPath().isEmpty()) {
+            String field = invalid.getPath().stream()
+                    .map(reference -> reference.getPropertyName() != null
+                            ? reference.getPropertyName() : String.valueOf(reference.getIndex()))
+                    .reduce((parent, child) -> parent + "." + child)
+                    .orElseThrow();
+            problem.setProperty("errors", List.of(Map.of("field", field, "message", invalidValueMessage(invalid))));
+        }
+        return handleExceptionInternal(ex, problem, headers, status, request);
+    }
+
+    private static String invalidValueMessage(MismatchedInputException ex) {
+        if (OffsetDateTime.class.equals(ex.getTargetType())) {
+            return IsoOffsetDateTimeDeserializer.MESSAGE;
+        }
+        return "has an invalid value";
     }
 
     @ExceptionHandler({CannotCreateTransactionException.class, DataAccessResourceFailureException.class})

@@ -56,6 +56,26 @@ class ConfigControllerTest {
         verify(configService).update(25.0, null);
     }
 
+    // v2 exposes the same resource, so a client can move its whole base path to /api/v2
+    @Test
+    void shouldServeTheSameResourceUnderV2() throws Exception {
+        when(configService.getConfig()).thenReturn(new MonitorConfig(22.0, 34.0));
+        when(configService.update(null, 40.0)).thenReturn(new MonitorConfig(22.0, 40.0));
+
+        mockMvc.perform(get("/api/v2/config"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.m").value(22.0))
+                .andExpect(jsonPath("$.s").value(34.0));
+        mockMvc.perform(patch("/api/v2/config").contentType(APPLICATION_JSON).content("{\"s\":40}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.s").value(40.0));
+        mockMvc.perform(patch("/api/v2/config").contentType(APPLICATION_JSON).content("{\"s\":-1}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors[?(@.field == 's')]").exists());
+
+        verify(configService).update(null, 40.0);
+    }
+
     @Test
     void shouldUpdateBothConstantsInOneCall() throws Exception {
         when(configService.update(25.0, 40.0)).thenReturn(new MonitorConfig(25.0, 40.0));

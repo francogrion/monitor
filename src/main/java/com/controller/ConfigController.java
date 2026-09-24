@@ -14,7 +14,8 @@ import org.springframework.web.bind.annotation.RestController;
 
 @Tag(name = "Configuration", description = "Constants M and S used to detect anomalies")
 @RestController
-@RequestMapping("/api/v1/config")
+// Unchanged in v2; served under both versions so a client can move its whole base path
+@RequestMapping({"/api/v1/config", "/api/v2/config"})
 public class ConfigController {
 
     private final ConfigService configService;

@@ -12,9 +12,9 @@ Este documento describe la arquitectura del servicio `monitor`, su evolución y 
 - Observabilidad: logs JSON (ECS) con campos estructurados por evento y métricas de negocio en `/actuator/prometheus`; la base tiene un timeout de conexión corto para fallar rápido (ADR-007).
 - Actuator (probes y Prometheus) en un puerto de management propio (9090), separado del puerto de la API (8080) (ADR-012).
 - Manifiestos de Kubernetes con kustomize (`deploy/kubernetes`): base endurecida (non-root, filesystem read-only, `restricted` PSS) y un overlay local autocontenido que CI despliega en kind (ADR-014).
-- API versionada bajo `/api/v1`, con validación de entrada y errores en formato RFC 9457 Problem Details; base caída → 503 con `Retry-After` (ADR-008). Contrato OpenAPI 3.1 generado desde el código, servido en `/v3/api-docs` y versionado en `docs/openapi.yaml` (ADR-013).
+- API versionada (`/api/v1` y `/api/v2`, que exige `timestamp` ISO-8601 con offset y lo normaliza a UTC), con validación de entrada y errores en formato RFC 9457 Problem Details; base caída → 503 con `Retry-After` (ADR-008, ADR-015). Un contrato OpenAPI 3.1 por versión, generado desde el código, servido en `/v3/api-docs/{versión}` y versionado en `docs/openapi-{versión}.yaml` (ADR-013, ADR-015).
 - CI en GitHub Actions: tests contra Postgres real y smoke test de la imagen Docker en cada PR; Dependabot mantiene actualizadas las dependencias (ADR-009).
-- Las 6 fases del roadmap están completas; los pendientes propuestos están al final de `PLANNING.md`.
+- Las 6 fases del roadmap y todos los pendientes propuestos al final de `PLANNING.md` están completos.
 
 ## Punto de partida (arquitectura original)
 
@@ -320,7 +320,7 @@ Además, los errores venían en dos formatos distintos y sin indicar qué campo 
 - Requests como `record`s separados del dominio (`SensorReadingRequest`, `ConfigUpdateRequest`).
 - `sensorId`: 1-64 caracteres `[A-Za-z0-9._-]`. `timestamp`: 1-64 caracteres de una fecha/hora (`[0-9A-Za-z:.+-]`). Los conjuntos de caracteres acotados dejan afuera saltos de línea y caracteres de control, lo que **cierra el log forging** también en los logs de texto (en JSON ya salían escapados). El largo máximo evita el error de la base con `VARCHAR(255)`.
 - `data` obligatorio. `s ≥ 0`. `PATCH` vacío rechazado.
-- `timestamp` sigue siendo un string libre (dentro del patrón): tiparlo como ISO-8601 con zona rompería a los clientes que mandan el formato original (`20192304123322`). Queda como candidato para una v2.
+- `timestamp` sigue siendo un string libre (dentro del patrón): tiparlo como ISO-8601 con zona rompería a los clientes que mandan el formato original (`20192304123322`). Queda como candidato para una v2. *(Resuelto en ADR-015.)*
 
 *Errores (RFC 9457 Problem Details):*
 - Un `@RestControllerAdvice` global que extiende `ResponseEntityExceptionHandler`, así todos los errores de Spring MVC (JSON inválido, 404, 415, etc.) salen en el mismo formato `application/problem+json`. Los errores de validación agregan una propiedad `errors` con `field` y `message`.
@@ -469,7 +469,7 @@ El contrato de la API v1 solo estaba descripto en el README. Un cliente no tení
 **Decisión:**
 - **Generado desde el código** con springdoc-openapi 3.1.1 (`springdoc-openapi-starter-webmvc-api`), la línea para Spring Boot 4: la versión 3.1.1 compila contra Spring Boot 4.1.0. Las reglas de Bean Validation (`@NotBlank`, `@Pattern`, `@PositiveOrZero`) se traducen solas a `required`, `pattern` y `minimum`, así que la spec no puede contradecir la validación real. Lo que springdoc no puede inferir se declara con anotaciones: resúmenes, descripciones y ejemplos, `minProperties: 1` en el `PATCH` y `required` en la respuesta de config.
 - **Errores:** las respuestas de `ApiExceptionHandler` no se ven por operación, así que un `OpenApiCustomizer` las agrega a todas. `400` (con la lista `errors`) y `415` solo van en operaciones con body. `500` y `503` van en todas, y `503` documenta el header `Retry-After`. Todas como `application/problem+json` con los schemas `Problem` y `ValidationProblem`. Los schemas se registran en el customizer porque springdoc reemplaza los declarados en el bean `OpenAPI`; el test lo detectó como `$ref` colgantes.
-- **Servida y versionada:** el servicio la sirve en `/v3/api-docs` (JSON) y `/v3/api-docs.yaml`, en el puerto de la API, porque es documentación para los clientes y no información operativa (ADR-012). Se puede apagar con `OPENAPI_ENABLED=false`. Además se commitea en `docs/openapi.yaml`, así los cambios de contrato aparecen en el diff de cada PR. Un test compara el archivo con lo generado y falla si difieren; `-Dopenapi.update=true` lo regenera. Para que la salida sea estable, las claves se ordenan (`writer-with-order-by-keys`) y el server es fijo (`http://localhost:8080`), no el host que la generó.
+- **Servida y versionada:** el servicio la sirve en `/v3/api-docs` (JSON) y `/v3/api-docs.yaml`, en el puerto de la API, porque es documentación para los clientes y no información operativa (ADR-012). Se puede apagar con `OPENAPI_ENABLED=false`. Además se commitea en `docs/openapi.yaml`, así los cambios de contrato aparecen en el diff de cada PR. Un test compara el archivo con lo generado y falla si difieren; `-Dopenapi.update=true` lo regenera. *(Con API v2 pasó a un documento por versión: ver ADR-015.)* Para que la salida sea estable, las claves se ordenan (`writer-with-order-by-keys`) y el server es fijo (`http://localhost:8080`), no el host que la generó.
 - Solo se documenta `/api/**`. Actuator queda afuera, además de vivir en otro puerto.
 
 **Alternativas consideradas:**
@@ -572,6 +572,63 @@ El servicio ya estaba preparado para correr en Kubernetes: sin estado por instan
 - Un tercer job en CI, de unos minutos. Conviene sumarlo a los checks requeridos de la protección de `master`.
 - `preStop.sleep` requiere Kubernetes 1.30 o posterior.
 - El cambio de UID de la imagen (999 → 10001) afecta a quien monte volúmenes con permisos del UID anterior; hoy la imagen no escribe fuera de `/tmp`.
+
+---
+
+### ADR-015: API v2 con `timestamp` tipado (ISO-8601 con offset), conviviendo con v1
+
+**Estado:** Aceptada. Resuelve el pendiente de ADR-008.
+
+**Contexto:**
+En v1, `timestamp` es texto libre dentro de un conjunto de caracteres acotado (ADR-008). Hacerlo estricto en v1 habría roto a los clientes que mandan el formato original (`20192304123322`) o fechas sin zona. Un timestamp sin offset es ambiguo: `2026-09-24T08:12:49` es un instante distinto según dónde esté el sensor.
+
+**Decisión:**
+- **Nueva versión `/api/v2`, sin tocar v1.**
+  - `POST /api/v2/monitor/data` exige `timestamp` como fecha-hora ISO-8601 **con offset** (`Z` o `±hh:mm`).
+  - La normaliza a UTC: se guarda y se devuelve como `Instant` (`2026-09-24T06:12:49.515Z`).
+  - `sensorId` y `data` tienen las mismas reglas que en v1.
+  - `/api/v2/config` es el mismo recurso que `/api/v1/config`, así un cliente cambia su base path completa en vez de mezclar versiones.
+- **Parser estricto propio** (`IsoOffsetDateTimeDeserializer`, con `DateTimeFormatter.ISO_OFFSET_DATE_TIME`):
+  - solo acepta strings, porque Jackson por defecto también toma números como epoch;
+  - rechaza la falta de offset y las fechas imposibles como el 30 de febrero.
+- **Errores de tipo o formato con el campo nombrado.** `ApiExceptionHandler` agrega `errors: [{field, message}]` también cuando el body no se puede leer por un valor inválido. Para el timestamp el mensaje dice el formato esperado; para otros tipos, "has an invalid value". El JSON malformado sigue sin `errors`, porque no hay un campo que nombrar. En v1 es un cambio aditivo: un `data: "abc"` ahora también lista el campo.
+- **Almacenamiento sin migración.** v2 guarda el instante normalizado en la misma columna `VARCHAR` que v1. Las lecturas son efímeras, porque se borran en cada ciclo de agregación (ADR-003), y el timestamp no interviene en el cálculo; solo se guarda y se loguea. Pasar a `TIMESTAMPTZ` tiene sentido cuando se retire v1, que es la que manda valores no parseables.
+- **Un documento OpenAPI por versión** (grupos de springdoc: `/v3/api-docs/v1` y `/v3/api-docs/v2`, commiteados en `docs/openapi-v1.yaml` y `docs/openapi-v2.yaml`).
+  - Agregar v2 no cambia el contrato de v1: el archivo de v1 es el de ADR-013 renombrado, sin un byte distinto, y el test de drift lo garantiza.
+  - El documento sin grupo (`/v3/api-docs`) se desactiva (`springdoc.enable-default-api-docs: false`), porque mezclaría versiones y no tendría las respuestas de error. Cambia la ruta de ADR-013.
+- El cliente de consola pasa a v2 y manda `Instant.now()`.
+
+**Alternativas consideradas:**
+- **Endurecer v1:** rompe a los clientes existentes sin aviso. Es justo lo que el versionado de ADR-008 busca evitar.
+- **Negociar la versión por header** (`Accept: application/vnd.monitor.v2+json`): es más difícil de probar con curl y de ver en logs y métricas, y rompe con la convención por path que ya usa v1.
+- **Aceptar también timestamps sin offset y asumir UTC:** reintroduce la ambigüedad que v2 viene a sacar. Un sensor configurado en hora local mandaría instantes corridos sin error.
+- **Columna `TIMESTAMPTZ` nueva ahora:** obliga a una migración y a una doble escritura para un dato que hoy no se consulta.
+
+**Cómo se probó:**
+- `MonitorV2ControllerTest` (9 tests). Primero falló por compilación.
+  - `Z` → 202, y el eco y lo guardado coinciden;
+  - `+02:00` se normaliza a UTC;
+  - los segundos exactos quedan sin fracción;
+  - con 400 y el campo `timestamp` nombrado: sin offset, texto que no es fecha, 30 de febrero, número y timestamp faltante;
+  - `sensorId` con salto de línea sigue rechazado.
+- `ConfigControllerTest`: `GET` y `PATCH` en `/api/v2/config`, incluida la validación.
+- `OpenApiSpecTest` (8 tests):
+  - un documento por versión, con sus rutas exactas;
+  - en v2, `timestamp` es `string`/`date-time` y requerido;
+  - errores en las dos versiones;
+  - el documento sin grupo da 404;
+  - drift de los dos archivos.
+- Manual contra la app y Postgres:
+  - la base guarda `2026-09-24T06:12:49.515Z` para una lectura v2 con `+02:00`, y el texto tal cual para una v1;
+  - v1 sigue aceptando `2026-09-24T08:12:49`;
+  - `data: "abc"` en v1 devuelve `errors` con `data`;
+  - el JSON malformado da 400 sin `errors`;
+  - `/api/v2/config` responde.
+- CI: el smoke test de Docker también manda una lectura v2 y pide los dos documentos OpenAPI.
+
+**Consecuencias:**
+- 126 tests en total (12 nuevos).
+- Hay que mantener dos versiones. Retirar v1 requiere anunciarlo (por ejemplo con el header `Deprecation`) y medir su uso. Hoy las métricas HTTP de Spring ya distinguen por `uri`.
 
 ---
 
