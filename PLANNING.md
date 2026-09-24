@@ -34,9 +34,9 @@ Reglas adicionales:
 Basado en el análisis de arquitectura (ver `ARCHITECTURE.md`). Estado: `[ ]` pendiente, `[~]` en progreso, `[x]` hecho.
 
 ### Fase 0 — Migración de stack
-- [ ] Migrar el proyecto a Spring Boot 4.1.1 sobre Java 25
-- [ ] Reescribir controllers/handlers actuales como componentes Spring (`@RestController`, `@Service`)
-- [ ] Portar tests existentes (`MathUtilsTest`, `JsonUtilsTest`) al nuevo stack
+- [x] Migrar el proyecto a Spring Boot 4.1.1 sobre Java 25
+- [x] Reescribir controllers/handlers actuales como componentes Spring (`@RestController`, `@Service`)
+- [x] Portar tests existentes (`MathUtilsTest`, `JsonUtilsTest`) al nuevo stack
 
 ### Fase 1 — Estado externalizado
 - [ ] Reemplazar `DataBaseService` (singleton en memoria) por persistencia real (a definir: Postgres / Redis)

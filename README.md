@@ -31,17 +31,23 @@ PLUS: Allow the system to get messages via HTTP.
 
 # Steps to run the server
 
+Requires **JDK 25**.
+
 1. Check-out the code
 2. Go to the downloads path
 3. Execute from console:
 ```
 	mvn clean install
 ```
-4. Execut from console:
+4. Execute from console:
 ```
-	mvn exec:java@server
+	mvn spring-boot:run
 ```
-There is a client to test the server:
+or, after building the jar:
+```
+	java -jar target/monitor-1.0-SNAPSHOT.jar
+```
+There is a client to test the server, sending random data from 4 simulated sensors:
 ```
 	mvn exec:java@client
 ```

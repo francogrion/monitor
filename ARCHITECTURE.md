@@ -54,4 +54,33 @@ Migrar la base de código a **Spring Boot 4.1.1** corriendo sobre **Java 25**.
 
 ---
 
+### ADR-002: Detalles de implementación de la migración a Spring Boot (Fase 0)
+
+**Estado:** Aceptada
+
+**Contexto:**
+Al ejecutar la migración definida en ADR-001 surgieron varias decisiones concretas no anticipadas, principalmente por cambios de Spring Boot 4 / Spring Framework 7 respecto a versiones anteriores.
+
+**Decisiones:**
+
+1. **Jackson 3 en vez de Jackson 2.** Spring Boot 4.1.1 trae `spring-boot-starter-jackson`, que resuelve `tools.jackson.core:jackson-databind` (Jackson 3, con `ObjectMapper` bajo el paquete `tools.jackson.databind`) en lugar del clásico `com.fasterxml.jackson.databind`. Se ajustó `JsonUtils` a la nueva API. Las anotaciones (`@JsonProperty`, etc.) siguen viviendo en `com.fasterxml.jackson.annotation` (ese módulo no cambió de coordenadas), por lo que `SensorData` no requirió cambios.
+
+2. **Clase `@SpringBootApplication` en el paquete raíz `com`.** Se ubicó `MonitorApplication` en `com` (no en `com.main`) para que el component scan por defecto cubra `com.controller`, `com.service`, `com.domain` y `com.utils`, y para que los slices de test (`@WebMvcTest`) puedan encontrarla buscando hacia arriba desde el paquete del test — Spring solo busca en paquetes ancestros, no en paquetes hermanos.
+
+3. **`spring-boot-starter-webmvc-test` como dependencia de test explícita.** En Spring Boot 4, `@WebMvcTest` se modularizó fuera de `spring-boot-starter-test` (vive ahora en `org.springframework.boot.webmvc.test.autoconfigure`, distribuido en el starter `spring-boot-starter-webmvc-test`). Hubo que agregarlo aparte.
+
+4. **`java.util.Timer` reemplazado por `@Scheduled(fixedRate = 30000)`** en `MonitorService`, habilitado con `@EnableScheduling` en la aplicación. Es la forma idiomática de Spring de expresar un job periódico, y deja el mecanismo listo para evolucionar en la Fase 2 (agregación coordinada entre instancias) sin acoplarse a `Timer`.
+
+5. **`ConfigService` y `MonitorService` como `@Service` en memoria.** Reemplazan a `DataBaseService`/`ConfigHandler`/`MonitorHandler` (singletons manuales). La inyección de dependencias de Spring hace innecesario el patrón singleton a mano, pero el estado sigue siendo en memoria: la externalización a una base de datos real queda para la Fase 1, sin cambios de diseño adicionales.
+
+6. **Extracción de `AnomalyChecker`.** La lógica `avg > M` / `diff > S` se movió a una clase utilitaria pura (paquete-privada, sin dependencias de logging), para poder testearla de forma directa y mantener `MonitorService` enfocado en orquestar lectura, agregación y logging.
+
+7. **`RestClient` migrado de Apache HttpClient a `java.net.http.HttpClient`** (incluido en el JDK), ya que Apache HttpClient dejó de ser una dependencia del proyecto al remover Spark. Evita reintroducir una dependencia externa solo para el cliente de prueba de consola.
+
+**Consecuencias:**
+- 40 tests (unitarios y de integración con `MockMvc`) cubren `AnomalyChecker`, `ConfigService`, `MonitorService`, ambos controllers, `MathUtils` y `JsonUtils`.
+- Verificado manualmente end-to-end: `mvn clean verify` empaqueta el jar, `java -jar target/monitor-1.0-SNAPSHOT.jar` levanta el servidor, y los endpoints de config y de ingesta de datos responden correctamente, incluyendo la detección de ambas anomalías bajo carga concurrente de 4 sensores simulados.
+
+---
+
 *(Los próximos ADRs — persistencia, mecanismo de agregación coordinada, containerización, etc. — se agregan a medida que se van decidiendo, siguiendo las fases definidas en `PLANNING.md`.)*
