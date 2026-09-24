@@ -59,6 +59,14 @@ There is a client to test the server, sending random data from 4 simulated senso
 	mvn exec:java@client
 ```
 
+Several instances can run in parallel against the same database (e.g. behind a load balancer).
+Aggregation runs at :00 and :30 of every minute, and a distributed lock (ShedLock) ensures only one
+instance performs it per slot (see [ARCHITECTURE.md](ARCHITECTURE.md) ADR-004):
+```
+	SERVER_PORT=8080 java -jar target/monitor-1.0-SNAPSHOT.jar
+	SERVER_PORT=8081 java -jar target/monitor-1.0-SNAPSHOT.jar
+```
+
 Running the test suite also requires a `monitor_test` database (`createdb -O monitor monitor_test`)
 for the repository integration tests (`@DataJpaTest` against a real Postgres, not an embedded fake).
 

@@ -2,7 +2,14 @@
 
 Este documento describe la arquitectura del servicio `monitor`, su evolución y las decisiones tomadas en el camino, junto con el razonamiento detrás de cada una. Se actualiza cada vez que se toma una decisión de arquitectura relevante.
 
-## Arquitectura actual (as-is)
+## Estado actual
+
+- Spring Boot 4.1.1 sobre Java 25 (ADR-001, ADR-002).
+- Estado (`M`, `S` y lecturas pendientes de agregación) persistido en PostgreSQL vía Spring Data JPA, esquema versionado con Flyway (ADR-003).
+- Stateless a nivel de instancia: pueden correr N réplicas contra la misma base; la agregación periódica se coordina con ShedLock para que corra una sola vez por slot en todo el cluster (ADR-004).
+- Pendiente: configuración externa completa, containerización, observabilidad y hardening de la API (Fases 3–6 de `PLANNING.md`).
+
+## Punto de partida (arquitectura original)
 
 - Aplicación Java 8 monolítica, empaquetada como jar, sin framework de aplicación (usa Spark Java como servidor HTTP embebido).
 - Un único proceso, sin persistencia real: el estado (`M`, `S`, buffer de lecturas) vive en singletons en memoria (`DataBaseService`, `MonitorHandler`).
@@ -117,4 +124,42 @@ En vez de testear contra una base embebida distinta a la de producción (H2), se
 
 ---
 
-*(Los próximos ADRs — mecanismo de agregación coordinada entre instancias, containerización, etc. — se agregan a medida que se van decidiendo, siguiendo las fases definidas en `PLANNING.md`.)*
+### ADR-004: Agregación coordinada entre instancias con ShedLock + trigger alineado al reloj (Fase 2)
+
+**Estado:** Aceptada. Reemplaza el punto 4 de ADR-002 (`@Scheduled(fixedRate = 30000)`).
+
+**Contexto:**
+Con el estado ya en Postgres (ADR-003), el servicio podía correr en varias instancias, pero cada una tenía su propio `@Scheduled` disparando `processData()`. Eso generaba dos problemas:
+1. **Procesamiento duplicado o concurrente:** varias instancias podían agregar el mismo lote al mismo tiempo, loguear anomalías duplicadas y competir al borrar las mismas filas.
+2. **Violación de la restricción de hardware** ("solo se puede procesar 2 veces por minuto"): con `fixedRate`, cada instancia arranca su contador en el momento en que bootea, así que los disparos no están alineados. Aun con un lock que evite ejecuciones simultáneas, con 2 instancias podía haber 3 agregaciones en un mismo minuto (p. ej. t=0s, t=26s, t=56s).
+
+**Decisión:**
+- **ShedLock** (`shedlock-spring` + `shedlock-provider-jdbc-template`) como lock distribuido para el job, usando la misma base Postgres como backend (tabla `shedlock`, migración `V2__shedlock.sql`). `processData()` lleva `@SchedulerLock(name = "processSensorData", lockAtLeastFor = "PT20S", lockAtMostFor = "PT29S")`.
+- **Trigger alineado al reloj:** `@Scheduled(cron = "0,30 * * * * *")` en lugar de `fixedRate`. Todas las instancias disparan en los segundos :00 y :30; exactamente una gana el lock en cada slot y las demás se saltean ese ciclo. Resultado: como máximo 2 agregaciones por minuto en todo el cluster, sin importar cuántas instancias haya.
+- **Tiempos del lock:** `lockAtLeastFor = 20s` absorbe diferencias de reloj entre instancias (una instancia con el reloj algunos segundos atrasado sigue encontrando el lock tomado en el mismo slot). `lockAtMostFor = 29s` garantiza que si la instancia que tiene el lock muere a mitad del proceso, el lock expira antes del próximo slot y otra instancia lo toma.
+- **`usingDbTime()`:** los timestamps del lock se calculan con el reloj de Postgres, no con el de cada instancia, así que el clock skew entre instancias no rompe la exclusión mutua.
+- **Orden de los advisors:** `@EnableSchedulerLock(order = HIGHEST_PRECEDENCE)` hace que el lock envuelva a `@Transactional`: lock → begin → procesar → commit → unlock. Así el lock nunca se libera antes de que el borrado de las lecturas procesadas quede commiteado. (ShedLock además escribe el lock en su propia transacción `REQUIRES_NEW`, por lo que es visible para otras instancias de inmediato aunque el método sea transaccional; lo verificamos inspeccionando el bytecode del `JdbcTemplateStorageAccessor`.)
+- `@EnableScheduling` se movió de `MonitorApplication` a `SchedulingConfig`, condicionado a `monitor.scheduling.enabled` (default `true`), para que los tests de integración puedan invocar `processData()` de forma determinística sin que el scheduler dispare en paralelo.
+
+**Por qué ShedLock y no otra opción:**
+- **Cola de mensajes (Kafka/RabbitMQ):** resuelve el problema, pero agrega un componente de infraestructura nuevo para un volumen trivial (~8 lecturas/seg). Queda como opción si más adelante se necesita procesamiento por streaming o más throughput.
+- **Advisory locks de Postgres a mano (`pg_try_advisory_lock`):** funciona, pero es reimplementar lo que ShedLock ya da, atado a Postgres y con más código propio a mantener y testear.
+- **Líder elegido (Spring Integration leader election, Kubernetes lease):** más potente pero más complejo; y el despliegue en Kubernetes todavía no está definido (Fase 4).
+- **ShedLock** reutiliza la base que ya tenemos, es un par de anotaciones, y es el patrón estándar en Spring para "un `@Scheduled` que corre una sola vez en el cluster".
+
+**Gotcha encontrado durante el desarrollo:**
+ShedLock inserta la fila de cada lock una sola vez y cachea en memoria que existe; de ahí en adelante solo hace `UPDATE ... WHERE lock_until <= now`. Borrar filas de `shedlock` mientras hay instancias corriendo hace que esas instancias nunca vuelvan a obtener el lock (hasta reiniciarlas). Los tests "expiran" el lock (`UPDATE ... SET lock_until = '2000-01-01'`) en lugar de borrarlo. **Operativamente: nunca borrar filas de `shedlock` con el servicio corriendo.**
+
+**Cómo se probó:**
+- `SchedulerLockConfigTest` (contra Postgres real): el lock se concede si está libre, se rechaza una segunda adquisición mientras está tomado, se vuelve a conceder tras liberarlo, y de dos hilos que compiten al mismo tiempo exactamente uno lo obtiene.
+- `MonitorServiceLockingTest` (`@SpringBootTest` contra Postgres real): si otra "instancia" tiene el lock `processSensorData`, `processData()` se saltea el ciclo y no toca las lecturas pendientes; si está libre, las procesa. Se verificó por mutación que el test falla si se quita `@SchedulerLock`.
+- Manual: dos instancias (puertos 8080 y 8081) contra la misma base, recibiendo 257 lecturas repartidas entre ambas durante 70s. La agregación ocurrió exactamente una vez por slot (09:04:00, 09:04:30, 09:05:00), siempre en una sola instancia; la otra disparaba en los mismos instantes y se salteaba. Luego se mató con `kill -9` a la instancia que venía ganando el lock y la otra tomó el relevo en el slot siguiente, procesando también las lecturas que la instancia muerta había recibido (ya estaban persistidas).
+
+**Consecuencias:**
+- El primer ciclo de agregación ya no ocurre al arrancar la aplicación, sino en el próximo :00 o :30 del reloj.
+- Una instancia puede quedar sin agregar nunca mientras otra gane siempre el lock; es esperado (el trabajo se hace una vez por slot, no importa dónde).
+- 54 tests en total (6 nuevos).
+
+---
+
+*(Los próximos ADRs — configuración externa, containerización, etc. — se agregan a medida que se van decidiendo, siguiendo las fases definidas en `PLANNING.md`.)*
