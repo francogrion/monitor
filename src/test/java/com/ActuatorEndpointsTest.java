@@ -1,70 +1,108 @@
 package com;
 
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.boot.test.web.server.LocalManagementPort;
+import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.web.servlet.MockMvc;
 
-import static org.hamcrest.Matchers.containsString;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 
-@SpringBootTest(properties = "monitor.scheduling.enabled=false")
-@AutoConfigureMockMvc
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+// Real server on random ports: with a separate management port, actuator lives in its own web server
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
+        "monitor.scheduling.enabled=false",
+        "management.server.port=0"
+})
 @ActiveProfiles("test")
 class ActuatorEndpointsTest {
 
-    @Autowired
-    private MockMvc mockMvc;
+    private final HttpClient httpClient = HttpClient.newHttpClient();
+
+    @LocalServerPort
+    private int apiPort;
+
+    @LocalManagementPort
+    private int managementPort;
 
     @Test
-    void shouldReportUpIncludingDatabase() throws Exception {
-        mockMvc.perform(get("/actuator/health"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value("UP"))
-                .andExpect(jsonPath("$.components.db.status").value("UP"));
+    void shouldServeActuatorOnADifferentPortThanTheApi() {
+        assertTrue(managementPort > 0 && managementPort != apiPort);
     }
 
     @Test
-    void shouldNotExposeDatabaseDetails() throws Exception {
-        mockMvc.perform(get("/actuator/health"))
-                .andExpect(jsonPath("$.components.db.details").doesNotExist());
+    void shouldReportUpIncludingDatabaseWithoutDetails() throws Exception {
+        HttpResponse<String> response = getManagement("/actuator/health");
+
+        assertEquals(200, response.statusCode());
+        assertTrue(response.body().contains("\"status\":\"UP\""), response.body());
+        assertTrue(response.body().contains("\"db\":{\"status\":\"UP\"}"), response.body());
+        assertFalse(response.body().contains("\"details\""), response.body());
     }
 
     @Test
     void shouldExposeLivenessProbeIndependentOfDatabase() throws Exception {
-        mockMvc.perform(get("/actuator/health/liveness"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value("UP"))
-                .andExpect(jsonPath("$.components.db").doesNotExist());
+        HttpResponse<String> response = getManagement("/actuator/health/liveness");
+
+        assertEquals(200, response.statusCode());
+        assertTrue(response.body().contains("\"status\":\"UP\""), response.body());
+        assertFalse(response.body().contains("\"db\""), response.body());
     }
 
     @Test
     void shouldExposeReadinessProbeIncludingDatabase() throws Exception {
-        mockMvc.perform(get("/actuator/health/readiness"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value("UP"))
-                .andExpect(jsonPath("$.components.db.status").value("UP"));
-    }
+        HttpResponse<String> response = getManagement("/actuator/health/readiness");
 
-    @Test
-    void shouldNotExposeOtherActuatorEndpoints() throws Exception {
-        mockMvc.perform(get("/actuator/env")).andExpect(status().isNotFound());
-        mockMvc.perform(get("/actuator/beans")).andExpect(status().isNotFound());
-        mockMvc.perform(get("/actuator/configprops")).andExpect(status().isNotFound());
-        mockMvc.perform(get("/actuator/metrics")).andExpect(status().isNotFound());
+        assertEquals(200, response.statusCode());
+        assertTrue(response.body().contains("\"db\":{\"status\":\"UP\"}"), response.body());
     }
 
     @Test
     void shouldExposeBusinessMetricsInPrometheusFormat() throws Exception {
-        mockMvc.perform(get("/actuator/prometheus"))
-                .andExpect(status().isOk())
-                .andExpect(content().string(containsString("monitor_readings_received_total")))
-                .andExpect(content().string(containsString("monitor_anomalies_total{type=\"average\"}")))
-                .andExpect(content().string(containsString("monitor_aggregation_batch_size_count")));
+        HttpResponse<String> response = getManagement("/actuator/prometheus");
+
+        assertEquals(200, response.statusCode());
+        assertTrue(response.body().contains("monitor_readings_received_total"));
+        assertTrue(response.body().contains("monitor_anomalies_total{type=\"average\"}"));
+        assertTrue(response.body().contains("monitor_aggregation_batch_size_count"));
+    }
+
+    @Test
+    void shouldNotExposeOtherActuatorEndpoints() throws Exception {
+        assertEquals(404, getManagement("/actuator/env").statusCode());
+        assertEquals(404, getManagement("/actuator/beans").statusCode());
+        assertEquals(404, getManagement("/actuator/configprops").statusCode());
+        assertEquals(404, getManagement("/actuator/metrics").statusCode());
+    }
+
+    @Test
+    void shouldNotExposeActuatorOnTheApiPort() throws Exception {
+        assertEquals(404, getApi("/actuator/health").statusCode());
+        assertEquals(404, getApi("/actuator/prometheus").statusCode());
+    }
+
+    @Test
+    void shouldStillServeTheApiOnTheApiPort() throws Exception {
+        assertEquals(200, getApi("/api/v1/config").statusCode());
+    }
+
+    private HttpResponse<String> getManagement(String path) throws IOException, InterruptedException {
+        return get(managementPort, path);
+    }
+
+    private HttpResponse<String> getApi(String path) throws IOException, InterruptedException {
+        return get(apiPort, path);
+    }
+
+    private HttpResponse<String> get(int port, String path) throws IOException, InterruptedException {
+        HttpRequest request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + path)).GET().build();
+        return httpClient.send(request, HttpResponse.BodyHandlers.ofString());
     }
 }

@@ -10,6 +10,7 @@ Este documento describe la arquitectura del servicio `monitor`, su evolución y 
 - Toda la configuración (puerto, base, defaults de `M`/`S`, cron y duraciones del lock) se toma de variables de entorno, con defaults en `application.yml` (ADR-005).
 - Empaquetado como imagen Docker (multi-stage, no-root, por capas) con health checks de liveness/readiness vía Actuator; `docker-compose.yml` levanta Postgres + el servicio (ADR-006).
 - Observabilidad: logs JSON (ECS) con campos estructurados por evento y métricas de negocio en `/actuator/prometheus`; la base tiene un timeout de conexión corto para fallar rápido (ADR-007).
+- Actuator (probes y Prometheus) en un puerto de management propio (9090), separado del puerto de la API (8080) (ADR-012).
 - API versionada bajo `/api/v1`, con validación de entrada y errores en formato RFC 9457 Problem Details; base caída → 503 con `Retry-After` (ADR-008).
 - CI en GitHub Actions: tests contra Postgres real y smoke test de la imagen Docker en cada PR; Dependabot mantiene actualizadas las dependencias (ADR-009).
 - Las 6 fases del roadmap están completas; los pendientes propuestos están al final de `PLANNING.md`.
@@ -266,7 +267,7 @@ Con varias instancias en contenedores (ADR-004, ADR-006), leer logs de texto por
 - Métricas de negocio propias: `monitor.readings.received`, `monitor.anomalies{type}` y `monitor.aggregation.batch.size` (lecturas por ciclo; su `count` es la cantidad de ciclos realmente procesados).
 - **Sin tag `sensorId`:** viene del cliente sin validar; un cliente que mande IDs arbitrarios crearía una serie temporal nueva por ID y podría tirar abajo Prometheus (explosión de cardinalidad).
 - **Sin timer propio para la agregación:** Spring ya publica `tasks.scheduled.execution` para los `@Scheduled`, con duración y `outcome`. Ojo: también cuenta los disparos que se saltearon por no obtener el lock (ADR-004), por eso los ciclos procesados se cuentan con `monitor.aggregation.batch.size`.
-- `/actuator/prometheus` se sirve en el mismo puerto que la API. En producción debería restringirse por red o moverse a otro puerto (`MANAGEMENT_SERVER_PORT`). No se separó ahora para no cambiar los probes y el `HEALTHCHECK` de ADR-006.
+- `/actuator/prometheus` se sirve en el mismo puerto que la API. En producción debería restringirse por red o moverse a otro puerto (`MANAGEMENT_SERVER_PORT`). No se separó ahora para no cambiar los probes y el `HEALTHCHECK` de ADR-006. *(Resuelto en ADR-012.)*
 
 *Timeouts / reintentos:*
 - No se agregaron integraciones externas; la única es la base. Se bajó el `connection-timeout` de Hikari de 30 s a **5 s** (`DB_CONNECTION_TIMEOUT_MS`): con la base caída, los requests fallan rápido en vez de acumular hilos.
@@ -423,6 +424,37 @@ El cron de agregación y las duraciones del lock se configuran por separado (ADR
 **Consecuencias:**
 - 93 tests en total (9 nuevos).
 - El cálculo usa UTC. En zonas con horario de verano, un cron que dispara justo en el cambio de hora podría tener un gap distinto una vez al año; para los crons de este servicio (cada 30 s) no aplica.
+
+---
+
+### ADR-012: Actuator en un puerto de management separado
+
+**Estado:** Aceptada. Resuelve el pendiente de ADR-007.
+
+**Contexto:**
+Los probes y `/actuator/prometheus` se servían en el mismo puerto que la API (ADR-006, ADR-007). Cualquiera que llegara a la API podía leer todas las métricas (volumen de lecturas, anomalías, pool de conexiones, JVM), y restringirlo dependía de reglas por path en el ingress o balanceador, fáciles de olvidar u omitir.
+
+**Decisión:**
+- `management.server.port=${MANAGEMENT_SERVER_PORT:9090}`: actuator corre en su propio conector HTTP. En el puerto de la API, `/actuator/*` responde 404.
+- **Default 9090 y no "mismo puerto":** el default seguro es el separado. Quien quiera volver al comportamiento anterior puede poner `MANAGEMENT_SERVER_PORT` igual a `SERVER_PORT`.
+- La imagen expone los dos puertos (`EXPOSE 8080 9090`) y el `HEALTHCHECK` consulta readiness en `MANAGEMENT_SERVER_PORT`. `docker-compose.yml` publica los dos, con `MANAGEMENT_PORTS` para escalar como ya hacía `APP_PORTS`.
+- Restringir el acceso pasa a ser un tema de red (qué puertos se publican y a quién), no de rutas: en los manifiestos de despliegue, los probes y el scraping de Prometheus apuntan a 9090 y solo 8080 se expone al tráfico externo.
+
+**Alternativas consideradas:**
+- **Restringir por path en el ingress/balanceador:** depende de configuración externa al servicio, y un error ahí expone las métricas sin que nada lo detecte.
+- **Autenticación en actuator (Spring Security):** agrega una dependencia y credenciales que gestionar para algo que se resuelve separando la red; Prometheus y los probes de Kubernetes funcionan mejor sin autenticación dentro de la red interna.
+- **Dejar el puerto separado como opt-in:** mantiene el default inseguro.
+
+**Cómo se probó:**
+- `ManagementPortDefaultTest`: los defaults resuelven `server.port=8080` y `management.server.port=9090`. Primero falló (no había puerto de management configurado).
+- `ActuatorEndpointsTest`, reescrito con requests HTTP reales a los dos puertos (con `@SpringBootTest(webEnvironment = RANDOM_PORT)` y `management.server.port=0`, no MockMvc, que no ve el conector separado): health, liveness, readiness y prometheus responden en el puerto de management; `/actuator/health` en el puerto de la API da 404 y la API sigue respondiendo ahí; `env`, `beans`, `configprops` y `metrics` siguen en 404.
+- CI: el smoke test de la imagen consulta readiness en `localhost:9090` y verifica que `localhost:8080/actuator/health` dé 404.
+- Manual con `docker compose`: contenedor `healthy` (el `HEALTHCHECK` usa el nuevo puerto), readiness `UP` con `db` en 9090, 404 en 8080, métricas `monitor_*` en `9090/actuator/prometheus`, `PATCH /api/v1/config` y `POST /api/v1/monitor/data` (202) en 8080.
+
+**Consecuencias:**
+- 96 tests en total (3 nuevos).
+- Correr dos instancias en la misma máquina ahora requiere puertos distintos también para management (`MANAGEMENT_SERVER_PORT=9091`); el README lo muestra.
+- Cualquier monitoreo externo que apuntara a `:8080/actuator/...` tiene que pasar a `:9090`.
 
 ---
 

@@ -20,11 +20,13 @@ COPY --from=build /workspace/target/extracted/application/ ./
 USER app
 # JSON (ECS) logs in containers, for log aggregators; set LOGGING_STRUCTURED_FORMAT_CONSOLE= for plain text
 ENV SERVER_PORT=8080 \
+    MANAGEMENT_SERVER_PORT=9090 \
     JDK_JAVA_OPTIONS="-XX:MaxRAMPercentage=75" \
     LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs
-EXPOSE 8080
+# 8080: API. 9090: actuator (probes, prometheus); publish it only to the monitoring/orchestration network
+EXPOSE 8080 9090
 # The runtime image has no curl/wget; bash's /dev/tcp is enough to check the readiness status code.
 # Timeout must exceed DB_CONNECTION_TIMEOUT_MS: with the DB down, readiness takes that long to answer 503
 HEALTHCHECK --interval=15s --timeout=7s --start-period=60s --retries=3 \
-  CMD bash -c 'exec 3<>/dev/tcp/127.0.0.1/${SERVER_PORT} && printf "GET /actuator/health/readiness HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3 && head -1 <&3 | grep -q " 200 "'
+  CMD bash -c 'exec 3<>/dev/tcp/127.0.0.1/${MANAGEMENT_SERVER_PORT} && printf "GET /actuator/health/readiness HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3 && head -1 <&3 | grep -q " 200 "'
 ENTRYPOINT ["java", "-jar", "app.jar"]

@@ -35,20 +35,25 @@ PLUS: Allow the system to get messages via HTTP.
 
 The quickest way to run everything (Postgres + the service) only requires Docker:
 ```
-	docker compose up --build                                     # one instance on http://localhost:8080
-	APP_PORTS=8080-8081 docker compose up --build --scale app=2   # two instances on 8080 and 8081, sharing the DB
-	docker compose down -v                                        # stop and delete the database volume
+	docker compose up --build        # one instance: API on http://localhost:8080, actuator on http://localhost:9090
+	APP_PORTS=8080-8081 MANAGEMENT_PORTS=9090-9091 docker compose up --build --scale app=2
+	                                 # two instances sharing the DB: API on 8080-8081, actuator on 9090-9091
+	docker compose down -v           # stop and delete the database volume
 ```
 Inside the container, logs are JSON (ECS format) for log aggregators; outside Docker they are plain text.
 The image can also be built and run on its own, pointing it at any Postgres via the env vars in
 [Configuration](#configuration):
 ```
 	docker build -t monitor .
-	docker run -p 8080:8080 -e DB_URL=jdbc:postgresql://<host>:5432/monitor monitor
+	docker run -p 8080:8080 -p 9090:9090 -e DB_URL=jdbc:postgresql://<host>:5432/monitor monitor
 ```
 The image build skips the tests (they need a real Postgres); run `mvn verify` for them.
 
 # Health checks and metrics
+
+Actuator runs on its own port, `9090` by default (`MANAGEMENT_SERVER_PORT`), separate from the API port
+(`8080`, `SERVER_PORT`): only the API port needs to be public, and the actuator port is published only to
+the monitoring/orchestration network. `/actuator/*` on the API port returns `404`.
 
 Only these Spring Boot Actuator endpoints are exposed:
 
@@ -72,9 +77,6 @@ Business metrics, besides the JVM/HTTP/DB-pool ones Spring Boot provides:
 | `monitor_anomalies_total{type="average"\|"difference"}` | anomalies detected, by type |
 | `monitor_aggregation_batch_size_{count,sum,max}` | readings aggregated per cycle; `_count` is the number of cycles actually processed |
 | `tasks_scheduled_execution_seconds{code_function="processData"}` | duration and outcome of each aggregation run (provided by Spring). It also counts runs skipped because another instance held the lock |
-
-`/actuator/prometheus` is served on the same port as the API; in production restrict it to the monitoring
-network (ingress rules) or move actuator to a separate port with `MANAGEMENT_SERVER_PORT`.
 
 # Steps to run the server without Docker
 
@@ -110,8 +112,8 @@ Several instances can run in parallel against the same database (e.g. behind a l
 Aggregation runs at :00 and :30 of every minute, and a distributed lock (ShedLock) ensures only one
 instance performs it per slot (see [ARCHITECTURE.md](ARCHITECTURE.md) ADR-004):
 ```
-	SERVER_PORT=8080 java -jar target/monitor-1.0-SNAPSHOT.jar
-	SERVER_PORT=8081 java -jar target/monitor-1.0-SNAPSHOT.jar
+	SERVER_PORT=8080 MANAGEMENT_SERVER_PORT=9090 java -jar target/monitor-1.0-SNAPSHOT.jar
+	SERVER_PORT=8081 MANAGEMENT_SERVER_PORT=9091 java -jar target/monitor-1.0-SNAPSHOT.jar
 ```
 
 Running the test suite also requires a `monitor_test` database (`createdb -O monitor monitor_test`)
@@ -123,7 +125,8 @@ GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on 
 pushes to `master`, with two jobs in parallel:
 - **Build and test:** `mvn verify` on JDK 25 against a Postgres 16 service container.
 - **Docker image smoke test:** builds the image with `docker compose up --build --wait` (which waits for the
-  image's health check) and calls the API.
+  image's health check), checks readiness on the actuator port and that actuator is not reachable on the API
+  port, and calls the API.
 
 Dependabot ([`.github/dependabot.yml`](.github/dependabot.yml)) opens weekly PRs to update Maven
 dependencies and the GitHub Actions, which are pinned to commit SHAs. The Docker base images are not
@@ -136,7 +139,8 @@ Everything is configured through environment variables (defaults in `src/main/re
 
 | Variable | Default | Description |
 |---|---|---|
-| `SERVER_PORT` | `8080` | HTTP port |
+| `SERVER_PORT` | `8080` | HTTP port of the API |
+| `MANAGEMENT_SERVER_PORT` | `9090` | HTTP port of actuator (health probes, Prometheus) |
 | `DB_URL` | `jdbc:postgresql://localhost:5432/monitor` | JDBC URL of the Postgres database |
 | `DB_USERNAME` | `monitor` | Database user |
 | `DB_PASSWORD` | `monitor` | Database password |
