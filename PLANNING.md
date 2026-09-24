@@ -39,9 +39,9 @@ Basado en el análisis de arquitectura (ver `ARCHITECTURE.md`). Estado: `[ ]` pe
 - [x] Portar tests existentes (`MathUtilsTest`, `JsonUtilsTest`) al nuevo stack
 
 ### Fase 1 — Estado externalizado
-- [ ] Reemplazar `DataBaseService` (singleton en memoria) por persistencia real (a definir: Postgres / Redis)
-- [ ] Persistir `M` y `S`
-- [ ] Persistir o encolar las lecturas de sensores pendientes de agregación
+- [x] Reemplazar `DataBaseService` (singleton en memoria) por persistencia real (PostgreSQL vía Spring Data JPA, ver ADR-003)
+- [x] Persistir `M` y `S`
+- [x] Persistir o encolar las lecturas de sensores pendientes de agregación
 
 ### Fase 2 — Diseño stateless / escalabilidad horizontal
 - [ ] Reemplazar el `Timer` en memoria por un mecanismo de agregación coordinado entre instancias (cola de mensajes o job coordinado)

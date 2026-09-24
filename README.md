@@ -31,10 +31,17 @@ PLUS: Allow the system to get messages via HTTP.
 
 # Steps to run the server
 
-Requires **JDK 25**.
+Requires **JDK 25** and a **PostgreSQL** instance (config constants and pending sensor
+readings are persisted there; see [ARCHITECTURE.md](ARCHITECTURE.md) ADR-003).
 
 1. Check-out the code
-2. Go to the downloads path
+2. Create the database and role (defaults expected by `application.yml`):
+```
+	createuser monitor --pwprompt   # password: monitor
+	createdb -O monitor monitor
+```
+   Override the connection via `DB_URL`, `DB_USERNAME`, `DB_PASSWORD` env vars if needed.
+   Schema is created automatically on startup by Flyway (see `src/main/resources/db/migration`).
 3. Execute from console:
 ```
 	mvn clean install
@@ -51,6 +58,9 @@ There is a client to test the server, sending random data from 4 simulated senso
 ```
 	mvn exec:java@client
 ```
+
+Running the test suite also requires a `monitor_test` database (`createdb -O monitor monitor_test`)
+for the repository integration tests (`@DataJpaTest` against a real Postgres, not an embedded fake).
 
 # Request to config constant M
 

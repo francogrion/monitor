@@ -1,26 +1,50 @@
 package com.service;
 
+import com.domain.ConfigEntity;
+import com.repository.ConfigRepository;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class ConfigService {
 
-    private volatile double m;
-    private volatile double s;
+    private static final long CONFIG_ID = 1L;
 
-    public double getM() {
-        return m;
+    private final ConfigRepository configRepository;
+
+    public ConfigService(ConfigRepository configRepository) {
+        this.configRepository = configRepository;
     }
 
-    public void setM(String m) {
-        this.m = Double.parseDouble(m);
+    public double getM() {
+        return findConfig().getM();
+    }
+
+    @Transactional
+    public void setM(String value) {
+        double parsed = Double.parseDouble(value);
+        ConfigEntity config = findConfig();
+        config.setM(parsed);
+        configRepository.save(config);
     }
 
     public double getS() {
-        return s;
+        return findConfig().getS();
     }
 
-    public void setS(String s) {
-        this.s = Double.parseDouble(s);
+    @Transactional
+    public void setS(String value) {
+        double parsed = Double.parseDouble(value);
+        ConfigEntity config = findConfig();
+        config.setS(parsed);
+        configRepository.save(config);
+    }
+
+    private ConfigEntity findConfig() {
+        return configRepository.findById(CONFIG_ID).orElseGet(() -> {
+            ConfigEntity config = new ConfigEntity();
+            config.setId(CONFIG_ID);
+            return config;
+        });
     }
 }
