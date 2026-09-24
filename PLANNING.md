@@ -65,7 +65,7 @@ Basado en el análisis de arquitectura (ver `ARCHITECTURE.md`). Estado: `[ ]` pe
 
 ### Próximos pasos propuestos (no planificados aún)
 Pendientes que fueron quedando anotados en los ADRs:
-- [ ] Pipeline de CI (build, tests contra Postgres, build de la imagen); evaluar Testcontainers para los tests de integración (ADR-003, ADR-006)
+- [x] Pipeline de CI (build, tests contra Postgres, build de la imagen); Testcontainers evaluado y postergado (ADR-009)
 - [ ] Manifiestos de despliegue (p. ej. Kubernetes) usando los probes de liveness/readiness (ADR-006)
 - [ ] Restringir `/actuator/prometheus` o moverlo a un puerto de management (ADR-007)
 - [ ] Especificación OpenAPI de la API v1 (ADR-008)

@@ -11,6 +11,7 @@ Este documento describe la arquitectura del servicio `monitor`, su evolución y 
 - Empaquetado como imagen Docker (multi-stage, no-root, por capas) con health checks de liveness/readiness vía Actuator; `docker-compose.yml` levanta Postgres + el servicio (ADR-006).
 - Observabilidad: logs JSON (ECS) con campos estructurados por evento y métricas de negocio en `/actuator/prometheus`; la base tiene un timeout de conexión corto para fallar rápido (ADR-007).
 - API versionada bajo `/api/v1`, con validación de entrada y errores en formato RFC 9457 Problem Details; base caída → 503 con `Retry-After` (ADR-008).
+- CI en GitHub Actions: tests contra Postgres real y smoke test de la imagen Docker en cada PR; Dependabot mantiene actualizadas las dependencias (ADR-009).
 - Las 6 fases del roadmap están completas; los pendientes propuestos están al final de `PLANNING.md`.
 
 ## Punto de partida (arquitectura original)
@@ -338,6 +339,36 @@ Además, los errores venían en dos formatos distintos y sin indicar qué campo 
 - 84 tests en total.
 - Los clientes del contrato original deben migrar a `/api/v1` (rutas nuevas, `PATCH` para config, 202 en vez de 200).
 - Queda pendiente publicar una especificación OpenAPI de v1.
+
+---
+
+### ADR-009: Integración continua con GitHub Actions
+
+**Estado:** Aceptada
+
+**Contexto:**
+Hasta ahora los tests se corrían solo a mano. Nada impedía mergear un PR que rompiera la build, los tests o la imagen Docker. Esa imagen, además, nunca se había construido fuera del sandbox de desarrollo (ADR-006).
+
+**Decisión:**
+- **GitHub Actions** (`.github/workflows/ci.yml`), porque el repo ya vive en GitHub: sin infraestructura extra y con el resultado visible en cada PR. Corre en cada pull request y en cada push a `master`.
+- **Job `test`:** `mvn verify` con JDK 25 (Temurin) contra un **Postgres 16 como service container**, con las mismas credenciales y base que usan los tests en local (`application-test.yml`), así los tests no necesitan cambios. Si fallan, se suben los reportes de Surefire como artifact.
+- **Job `docker`:** `docker compose up --build --wait` construye la imagen con el Dockerfile real, levanta Postgres + el servicio y espera a que el `HEALTHCHECK` (readiness) dé healthy. Después un smoke test llama a la API: readiness `UP`, `PATCH` de la config y `POST` de una lectura esperando `202`. Valida de punta a punta la imagen, el compose, las migraciones y el wiring. Corre en paralelo con `test`, para tener feedback más rápido.
+- **Acciones fijadas por SHA de commit**, con la versión en un comentario (`actions/checkout@3d3c42e… # v7.0.1`). Un tag se puede mover y un SHA no: es la recomendación de GitHub para no ejecutar código de terceros que cambió sin aviso.
+- **Dependabot** (`.github/dependabot.yml`), semanal para `github-actions`, `maven` y `docker`. Sin él, los SHAs fijados y las dependencias quedan congelados.
+- `permissions: contents: read` (mínimo privilegio para el token del workflow) y `concurrency`, que cancela la corrida anterior de un PR ante un push nuevo pero nunca las de `master`.
+
+**Testcontainers (evaluado, postergado):** harían los tests autosuficientes (no hace falta un Postgres local) a costa de requerir Docker en cada máquina que corra los tests y agregar dependencias y tiempo de arranque. Con el service container, CI ya corre contra un Postgres real sin tocar los tests. Se reconsidera si configurar el Postgres local se vuelve una fricción real para quien desarrolla.
+
+**Cómo se probó:**
+- El workflow pasa `actionlint` (con `shellcheck` para los scripts de los `run:`).
+- Los inputs de cada acción se verificaron contra el `action.yml` de la versión fijada. Los SHAs se resolvieron con `git ls-remote` sobre los tags.
+- Simulación local del job `test` contra un `postgres:16` **recién creado** con las mismas variables que el service container: 84/84. Confirma que los tests no dependen de datos previos.
+- Simulación local del job `docker` con los mismos comandos (`--wait` + smoke test): PASS.
+- La corrida real en GitHub del PR que introduce el workflow es la verificación final (ver el PR).
+
+**Consecuencias:**
+- Para que el CI **bloquee** merges hay que marcar los checks como obligatorios en la protección de la rama `master` (Settings → Branches), que es configuración del repo, no código.
+- El job `docker` descarga las dependencias Maven en cada corrida (el cache de BuildKit no persiste entre runners). Si se vuelve lento, se puede cachear con `docker/build-push-action` y el cache de GitHub Actions.
 
 ---
 
