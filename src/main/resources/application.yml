@@ -14,3 +14,16 @@ spring:
 
 server:
   port: ${SERVER_PORT:8080}
+
+monitor:
+  # Used only until M/S are set via the API; persisted values always win afterwards
+  defaults:
+    m: ${MONITOR_DEFAULT_M:0}
+    s: ${MONITOR_DEFAULT_S:0}
+  # Invariant: lock-at-least-for <= lock-at-most-for < interval between cron slots
+  aggregation:
+    cron: ${MONITOR_AGGREGATION_CRON:0,30 * * * * *}
+    lock-at-least-for: ${MONITOR_LOCK_AT_LEAST_FOR:PT20S}
+    lock-at-most-for: ${MONITOR_LOCK_AT_MOST_FOR:PT29S}
+  scheduling:
+    enabled: ${MONITOR_SCHEDULING_ENABLED:true}

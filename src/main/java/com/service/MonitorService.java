@@ -40,10 +40,12 @@ public class MonitorService {
         sensorReadingRepository.save(toEntity(sensorData));
     }
 
-    // Wall-clock aligned so every instance fires at :00/:30; the lock lets exactly one win each slot,
-    // capping processing at 2 per minute cluster-wide. lockAtLeastFor absorbs clock skew between instances.
-    @Scheduled(cron = "0,30 * * * * *")
-    @SchedulerLock(name = PROCESS_LOCK_NAME, lockAtLeastFor = "PT20S", lockAtMostFor = "PT29S")
+    // Wall-clock aligned cron so every instance fires in the same slots; the lock lets exactly one win each slot.
+    // lockAtLeastFor absorbs clock skew between instances; see monitor.aggregation.* in application.yml.
+    @Scheduled(cron = "${monitor.aggregation.cron}")
+    @SchedulerLock(name = PROCESS_LOCK_NAME,
+            lockAtLeastFor = "${monitor.aggregation.lock-at-least-for}",
+            lockAtMostFor = "${monitor.aggregation.lock-at-most-for}")
     @Transactional
     public void processData() {
         List<SensorReadingEntity> pending = sensorReadingRepository.findAllByOrderByIdAsc();

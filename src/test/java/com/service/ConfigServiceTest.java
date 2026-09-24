@@ -1,7 +1,9 @@
 package com.service;
 
+import com.config.ConfigDefaults;
 import com.domain.ConfigEntity;
 import com.repository.ConfigRepository;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -20,46 +22,48 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class ConfigServiceTest {
 
+    private static final double DEFAULT_M = 22.0;
+    private static final double DEFAULT_S = 34.0;
+
     @Mock
     private ConfigRepository configRepository;
 
     private ConfigService configService;
 
-    private ConfigService newConfigService() {
-        return new ConfigService(configRepository);
+    @BeforeEach
+    void setUp() {
+        configService = new ConfigService(configRepository, new ConfigDefaults(DEFAULT_M, DEFAULT_S));
     }
 
     @Test
-    void shouldDefaultMToZeroWhenNoConfigIsPersistedYet() {
+    void shouldReturnConfiguredDefaultMWhenNoConfigIsPersistedYet() {
         when(configRepository.findById(1L)).thenReturn(Optional.empty());
-        configService = newConfigService();
 
-        assertEquals(0.0, configService.getM());
+        assertEquals(DEFAULT_M, configService.getM());
     }
 
     @Test
-    void shouldDefaultSToZeroWhenNoConfigIsPersistedYet() {
+    void shouldReturnConfiguredDefaultSWhenNoConfigIsPersistedYet() {
         when(configRepository.findById(1L)).thenReturn(Optional.empty());
-        configService = newConfigService();
 
-        assertEquals(0.0, configService.getS());
+        assertEquals(DEFAULT_S, configService.getS());
     }
 
     @Test
-    void shouldReturnPersistedM() {
+    void shouldPreferPersistedValuesOverConfiguredDefaults() {
         ConfigEntity config = new ConfigEntity();
         config.setId(1L);
-        config.setM(22.0);
+        config.setM(50.0);
+        config.setS(60.0);
         when(configRepository.findById(1L)).thenReturn(Optional.of(config));
-        configService = newConfigService();
 
-        assertEquals(22.0, configService.getM());
+        assertEquals(50.0, configService.getM());
+        assertEquals(60.0, configService.getS());
     }
 
     @Test
-    void shouldCreateAndPersistConfigWhenSettingMForTheFirstTime() {
+    void shouldKeepDefaultSWhenSettingMForTheFirstTime() {
         when(configRepository.findById(1L)).thenReturn(Optional.empty());
-        configService = newConfigService();
 
         configService.setM("25");
 
@@ -67,6 +71,19 @@ class ConfigServiceTest {
         verify(configRepository).save(captor.capture());
         assertEquals(1L, captor.getValue().getId());
         assertEquals(25.0, captor.getValue().getM());
+        assertEquals(DEFAULT_S, captor.getValue().getS());
+    }
+
+    @Test
+    void shouldKeepDefaultMWhenSettingSForTheFirstTime() {
+        when(configRepository.findById(1L)).thenReturn(Optional.empty());
+
+        configService.setS("40");
+
+        ArgumentCaptor<ConfigEntity> captor = ArgumentCaptor.forClass(ConfigEntity.class);
+        verify(configRepository).save(captor.capture());
+        assertEquals(DEFAULT_M, captor.getValue().getM());
+        assertEquals(40.0, captor.getValue().getS());
     }
 
     @Test
@@ -74,8 +91,8 @@ class ConfigServiceTest {
         ConfigEntity existing = new ConfigEntity();
         existing.setId(1L);
         existing.setM(25.0);
+        existing.setS(10.0);
         when(configRepository.findById(1L)).thenReturn(Optional.of(existing));
-        configService = newConfigService();
 
         configService.setS("34");
 
@@ -87,8 +104,6 @@ class ConfigServiceTest {
 
     @Test
     void shouldThrowAndNeverPersistWhenSettingMWithInvalidNumber() {
-        configService = newConfigService();
-
         assertThrows(NumberFormatException.class, () -> configService.setM("not-a-number"));
 
         verify(configRepository, never()).save(any());
@@ -96,8 +111,6 @@ class ConfigServiceTest {
 
     @Test
     void shouldThrowAndNeverPersistWhenSettingSWithInvalidNumber() {
-        configService = newConfigService();
-
         assertThrows(NumberFormatException.class, () -> configService.setS("not-a-number"));
 
         verify(configRepository, never()).save(any());
