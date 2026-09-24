@@ -1,4 +1,6 @@
 # monitor
+[![CI](https://github.com/francogrion/monitor/actions/workflows/ci.yml/badge.svg)](https://github.com/francogrion/monitor/actions/workflows/ci.yml)
+
 API to process sensor data
 
 There are 4 sensors in a system to mesure a numeric value and send it for further processing.
@@ -114,6 +116,17 @@ instance performs it per slot (see [ARCHITECTURE.md](ARCHITECTURE.md) ADR-004):
 
 Running the test suite also requires a `monitor_test` database (`createdb -O monitor monitor_test`)
 for the repository integration tests (`@DataJpaTest` against a real Postgres, not an embedded fake).
+
+# Continuous integration
+
+GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on every pull request and on
+pushes to `master`, with two jobs in parallel:
+- **Build and test:** `mvn verify` on JDK 25 against a Postgres 16 service container.
+- **Docker image smoke test:** builds the image with `docker compose up --build --wait` (which waits for the
+  image's health check) and calls the API.
+
+Dependabot ([`.github/dependabot.yml`](.github/dependabot.yml)) opens weekly PRs to update Maven
+dependencies, the Docker base images and the GitHub Actions, which are pinned to commit SHAs.
 
 # Configuration
 
