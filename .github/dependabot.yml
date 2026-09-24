@@ -11,8 +11,6 @@ updates:
     schedule:
       interval: weekly
 
-  # Base images in the Dockerfile (maven, eclipse-temurin)
-  - package-ecosystem: docker
-    directory: /
-    schedule:
-      interval: weekly
+  # No "docker" ecosystem on purpose: the Dockerfile's floating tags (25-jre, 3.9-eclipse-temurin-25) already
+  # pick up patch releases on every rebuild, so Dependabot would only propose JDK major changes, which are
+  # deliberate decisions (see ADR-010 in ARCHITECTURE.md).

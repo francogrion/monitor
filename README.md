@@ -126,7 +126,9 @@ pushes to `master`, with two jobs in parallel:
   image's health check) and calls the API.
 
 Dependabot ([`.github/dependabot.yml`](.github/dependabot.yml)) opens weekly PRs to update Maven
-dependencies, the Docker base images and the GitHub Actions, which are pinned to commit SHAs.
+dependencies and the GitHub Actions, which are pinned to commit SHAs. The Docker base images are not
+included: their tags already follow the JDK 25 patch releases, and moving to another JDK is a manual,
+documented change (see [ARCHITECTURE.md](ARCHITECTURE.md) ADR-010).
 
 # Configuration
 
