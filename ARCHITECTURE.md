@@ -9,7 +9,8 @@ Este documento describe la arquitectura del servicio `monitor`, su evolución y 
 - Stateless a nivel de instancia: pueden correr N réplicas contra la misma base; la agregación periódica se coordina con ShedLock para que corra una sola vez por slot en todo el cluster (ADR-004).
 - Toda la configuración (puerto, base, defaults de `M`/`S`, cron y duraciones del lock) se toma de variables de entorno, con defaults en `application.yml` (ADR-005).
 - Empaquetado como imagen Docker (multi-stage, no-root, por capas) con health checks de liveness/readiness vía Actuator; `docker-compose.yml` levanta Postgres + el servicio (ADR-006).
-- Pendiente: observabilidad y hardening de la API (Fases 5–6 de `PLANNING.md`).
+- Observabilidad: logs JSON (ECS) con campos estructurados por evento y métricas de negocio en `/actuator/prometheus`; la base tiene un timeout de conexión corto para fallar rápido (ADR-007).
+- Pendiente: hardening de la API (Fase 6 de `PLANNING.md`).
 
 ## Punto de partida (arquitectura original)
 
@@ -239,4 +240,49 @@ El servicio ya era stateless y configurable por variables de entorno (ADR-004, A
 
 ---
 
-*(Los próximos ADRs — observabilidad, hardening de la API, etc. — se agregan a medida que se van decidiendo, siguiendo las fases definidas en `PLANNING.md`.)*
+### ADR-007: Logs estructurados, métricas de negocio y fail-fast ante la base (Fase 5)
+
+**Estado:** Aceptada. Corrige el mapeo de puertos de `docker-compose.yml` descrito en ADR-006.
+
+**Contexto:**
+Con varias instancias en contenedores (ADR-004, ADR-006), leer logs de texto por instancia deja de ser práctico, y no había forma de medir el sistema (lecturas recibidas, anomalías, ciclos procesados) más allá de buscar en los logs. Además, si Postgres caía, cada request esperaba hasta 30 s (default de Hikari) una conexión, y con ~8 lecturas/seg los hilos del servidor se acumulaban.
+
+**Decisión:**
+
+*Logs estructurados:*
+- Se usa el **structured logging integrado de Spring Boot**, formato **ECS** (Elastic Common Schema). Lo entienden directo Elasticsearch/OpenSearch, y Loki/Datadog lo parsean como JSON. No agrega dependencias (a diferencia de `logstash-logback-encoder`).
+- **Activado por defecto solo en la imagen Docker** (`LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs`): en contenedores los logs van a un agregador, y en local una persona los lee mejor en texto. Se puede cambiar por variable de entorno (vacía = texto).
+- Los eventos clave agregan **campos propios** vía la API fluida de SLF4J (`addKeyValue`), que Spring Boot serializa como campos de primer nivel del JSON:
+  - Lectura recibida: `sensorId`, `data`, `timestamp`.
+  - Ciclo procesado: `readings`, `average`, `max`, `min`.
+  - Anomalía: `anomaly` (`average`/`difference`), `value`, `threshold`.
+
+  Permiten filtrar o alertar (p. ej. `anomaly:"average"`) sin parsear el texto del mensaje, que se mantuvo igual para no romper a quien ya lee esos logs.
+
+*Métricas (Micrometer + Prometheus):*
+- `micrometer-registry-prometheus` y `/actuator/prometheus` expuesto; el resto de los endpoints de actuator sigue cerrado (ADR-006).
+- Métricas de negocio propias: `monitor.readings.received`, `monitor.anomalies{type}` y `monitor.aggregation.batch.size` (lecturas por ciclo; su `count` es la cantidad de ciclos realmente procesados).
+- **Sin tag `sensorId`:** viene del cliente sin validar; un cliente que mande IDs arbitrarios crearía una serie temporal nueva por ID y podría tirar abajo Prometheus (explosión de cardinalidad).
+- **Sin timer propio para la agregación:** Spring ya publica `tasks.scheduled.execution` para los `@Scheduled`, con duración y `outcome`. Ojo: también cuenta los disparos que se saltearon por no obtener el lock (ADR-004), por eso los ciclos procesados se cuentan con `monitor.aggregation.batch.size`.
+- `/actuator/prometheus` se sirve en el mismo puerto que la API. En producción debería restringirse por red o moverse a otro puerto (`MANAGEMENT_SERVER_PORT`). No se separó ahora para no cambiar los probes y el `HEALTHCHECK` de ADR-006.
+
+*Timeouts / reintentos:*
+- No se agregaron integraciones externas; la única es la base. Se bajó el `connection-timeout` de Hikari de 30 s a **5 s** (`DB_CONNECTION_TIMEOUT_MS`): con la base caída, los requests fallan rápido en vez de acumular hilos.
+- El `HEALTHCHECK` de la imagen pasó de 3 s a 7 s de timeout: con la base caída, readiness tarda ese `connection-timeout` en responder su 503, y el healthcheck debe esperar más que eso para reflejar la respuesta real y no un timeout propio.
+- **Sin reintentos del lado del servidor:** reintentar la escritura dentro del request retiene hilos justo cuando la base tiene problemas y oculta la caída. El reintento corresponde al cliente (el sensor). La agregación se reintenta sola en el próximo slot.
+
+*Corrección de `docker-compose.yml` (ADR-006):* el rango de puertos `8080-8081` hacía que, con una sola instancia, la app quedara a veces en el 8081 (verificado: 8080, 8081, 8080 en tres corridas). Ahora el puerto es fijo (`8080`) y el rango se pide explícitamente al escalar: `APP_PORTS=8080-8081 docker compose up --scale app=2`.
+
+**Cómo se probó:**
+- `MonitorServiceTest` (unitario, `SimpleMeterRegistry` + `ListAppender`): contadores de lecturas (y que un rechazo no cuente), anomalías por tipo y tamaño de lote por ciclo; campos clave-valor en los logs de lectura, anomalía y ciclo. Primero falló por compilación.
+- `ActuatorEndpointsTest` (ex `HealthEndpointTest`): `/actuator/prometheus` responde 200 con las métricas de negocio y `/actuator/metrics` sigue en 404. Primero falló con 404.
+- `StructuredLoggingTest` (`@SpringBootTest` + captura de salida, Postgres real): con formato ECS, la línea de "Data collected" es JSON y trae `sensorId` y `data` como campos. Asegura que Spring Boot efectivamente serializa los pares clave-valor.
+- Manual con `docker compose`: logs JSON con los campos esperados en los tres tipos de evento; `/actuator/prometheus` con las métricas de negocio y `tasks_scheduled_execution_seconds`. Con la base caída, `POST` → 500 en 5,0 s y liveness en 200; al volver la base, el primer `POST` dio 200 inmediatamente y readiness volvió a `UP`. Con `LOGGING_STRUCTURED_FORMAT_CONSOLE` vacío, los logs salen en texto.
+
+**Consecuencias:**
+- 74 tests en total (10 nuevos).
+- Los errores de la base se devuelven como un 500 genérico de Spring; mapearlos a una respuesta más útil (p. ej. 503 con `Retry-After`) queda para el hardening de la API (Fase 6).
+
+---
+
+*(Los próximos ADRs — hardening de la API, etc. — se agregan a medida que se van decidiendo, siguiendo las fases definidas en `PLANNING.md`.)*

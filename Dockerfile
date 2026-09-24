@@ -18,10 +18,13 @@ COPY --from=build /workspace/target/extracted/dependencies/ ./
 COPY --from=build /workspace/target/extracted/snapshot-dependencies/ ./
 COPY --from=build /workspace/target/extracted/application/ ./
 USER app
+# JSON (ECS) logs in containers, for log aggregators; set LOGGING_STRUCTURED_FORMAT_CONSOLE= for plain text
 ENV SERVER_PORT=8080 \
-    JDK_JAVA_OPTIONS="-XX:MaxRAMPercentage=75"
+    JDK_JAVA_OPTIONS="-XX:MaxRAMPercentage=75" \
+    LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs
 EXPOSE 8080
-# The runtime image has no curl/wget; bash's /dev/tcp is enough to check the readiness status code
-HEALTHCHECK --interval=15s --timeout=3s --start-period=60s --retries=3 \
+# The runtime image has no curl/wget; bash's /dev/tcp is enough to check the readiness status code.
+# Timeout must exceed DB_CONNECTION_TIMEOUT_MS: with the DB down, readiness takes that long to answer 503
+HEALTHCHECK --interval=15s --timeout=7s --start-period=60s --retries=3 \
   CMD bash -c 'exec 3<>/dev/tcp/127.0.0.1/${SERVER_PORT} && printf "GET /actuator/health/readiness HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3 && head -1 <&3 | grep -q " 200 "'
 ENTRYPOINT ["java", "-jar", "app.jar"]
