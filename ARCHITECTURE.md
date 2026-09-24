@@ -400,4 +400,30 @@ Además, con los tags que usa el Dockerfile (`25-jre`, `3.9-eclipse-temurin-25`)
 
 ---
 
+### ADR-011: Validar al arranque el cron y las duraciones del lock
+
+**Estado:** Aceptada. Resuelve el riesgo que ADR-005 dejó documentado.
+
+**Contexto:**
+El cron de agregación y las duraciones del lock se configuran por separado (ADR-005). Si no cumplen `lock-at-least-for ≤ lock-at-most-for < intervalo entre disparos`, un slot puede saltearse (el lock sigue tomado) o dos instancias pueden agregar en el mismo slot (el lock se liberó antes de tiempo). Hasta ahora nada lo detectaba: el servicio arrancaba igual y el problema aparecía, si aparecía, en producción.
+
+**Decisión:**
+- Un `@ConfigurationProperties` (`AggregationProperties`) bindea las mismas propiedades `monitor.aggregation.*` que leen los placeholders de `@Scheduled`/`@SchedulerLock`, con el solo fin de validarlas. Si la combinación es inconsistente, el binding falla y **la aplicación no arranca**. Spring Boot muestra "APPLICATION FAILED TO START" con el mensaje, que nombra la propiedad y los valores.
+- **Intervalo mínimo del cron:** se recorren los próximos 1000 disparos (desde una fecha fija en UTC, para que el cálculo sea determinístico) y se toma el menor gap. Así se cubren crons irregulares (`0 0,5 * * * *` → 5 min, no 30) sin fijar un horizonte de tiempo que dejaría afuera crons de baja frecuencia.
+- También se valida que `lock-at-least-for` no sea negativo y que el cron sea válido y dispare más de una vez.
+
+**Alternativas consideradas:**
+- **Validar el intervalo "típico"** (por ejemplo, la diferencia entre los dos primeros disparos): falla con crons irregulares, justo los que más fácil se configuran mal.
+- **Validar en tiempo de ejecución** (loguear si una instancia encuentra el lock tomado): detecta el problema tarde y no lo impide.
+
+**Cómo se probó:**
+- `AggregationPropertiesTest`: intervalo de un cron regular y de uno irregular; se aceptan los defaults; se rechazan `lock-at-most-for` ≥ intervalo, `lock-at-least-for` > `lock-at-most-for`, duraciones negativas y crons inválidos; con `ApplicationContextRunner`, un contexto con configuración inconsistente no arranca y uno consistente sí. Primero falló por compilación.
+- Manual: la app real con `MONITOR_AGGREGATION_CRON="*/10 * * * * *"` y `MONITOR_LOCK_AT_MOST_FOR=PT15S` terminó con código 1 y el mensaje "lock-at-most-for (PT15S) must be shorter than the shortest interval between runs of monitor.aggregation.cron '*/10 * * * * *' (PT10S)".
+
+**Consecuencias:**
+- 93 tests en total (9 nuevos).
+- El cálculo usa UTC. En zonas con horario de verano, un cron que dispara justo en el cambio de hora podría tener un gap distinto una vez al año; para los crons de este servicio (cada 30 s) no aplica.
+
+---
+
 *(Nuevos ADRs se agregan a medida que se toman decisiones; ver los próximos pasos propuestos al final de `PLANNING.md`.)*

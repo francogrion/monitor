@@ -70,7 +70,7 @@ Pendientes que fueron quedando anotados en los ADRs:
 - [ ] Restringir `/actuator/prometheus` o moverlo a un puerto de management (ADR-007)
 - [ ] Especificación OpenAPI de la API v1 (ADR-008)
 - [ ] `timestamp` tipado (ISO-8601 con zona) en una futura versión de la API (ADR-008)
-- [ ] Validar al arranque el invariante entre cron y duraciones del lock (ADR-005)
+- [x] Validar al arranque el invariante entre cron y duraciones del lock (ADR-011)
 
 ## Notas
 - Cada decisión técnica relevante (por qué Spring Boot 4.1.1, por qué tal base de datos, etc.) se documenta en `ARCHITECTURE.md`, no acá.

@@ -150,7 +150,8 @@ Everything is configured through environment variables (defaults in `src/main/re
 | `LOGGING_STRUCTURED_FORMAT_CONSOLE` | unset (`ecs` in the Docker image) | JSON log format: `ecs`, `logstash` or `gelf`; unset for plain text |
 
 When changing the cron, keep `MONITOR_LOCK_AT_LEAST_FOR` ≤ `MONITOR_LOCK_AT_MOST_FOR` < interval between slots;
-otherwise a slot can be skipped (lock still held) or run twice (lock released too early).
+otherwise a slot can be skipped (lock still held) or run twice (lock released too early). The service checks this
+at startup and refuses to start, naming the offending property, when it doesn't hold.
 
 `M`/`S` defaults only apply while nothing is persisted: once a value is set via the API it is stored in the
 database and always wins, even after a restart with different defaults.
