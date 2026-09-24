@@ -1,0 +1,251 @@
+openapi: 3.1.0
+info:
+  description: Receives sensor readings and manages the constants M and S used to
+    detect anomalies. Readings are aggregated every 30 seconds; anomalies are reported
+    in the service logs and metrics.
+  title: Monitor API
+  version: v1
+servers:
+- description: Local (docker compose)
+  url: http://localhost:8080
+tags:
+- description: Constants M and S used to detect anomalies
+  name: Configuration
+- description: Sensor readings to aggregate
+  name: Readings
+paths:
+  /api/v1/config:
+    get:
+      operationId: getConfig
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MonitorConfig"
+          description: Current constants
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Unexpected error; details are only logged, never returned"
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: The database is unavailable; retry after `Retry-After` seconds
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying
+              schema:
+                type: integer
+                format: int32
+      summary: Read the constants
+      tags:
+      - Configuration
+    patch:
+      description: "Partial update: send one or both; a missing one stays unchanged.\
+        \ Applies from the next aggregation cycle."
+      operationId: updateConfig
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigUpdateRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MonitorConfig"
+          description: Resulting constants
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ValidationProblem"
+          description: "Invalid body: missing or invalid fields (listed in `errors`),\
+            \ malformed JSON or wrong types"
+        "415":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: The body is not `application/json`
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Unexpected error; details are only logged, never returned"
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: The database is unavailable; retry after `Retry-After` seconds
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying
+              schema:
+                type: integer
+                format: int32
+      summary: Update the constants
+      tags:
+      - Configuration
+  /api/v1/monitor/data:
+    post:
+      description: Stores the reading; it is aggregated with the other readings of
+        its sensor in the next 30-second cycle.
+      operationId: readSensorData
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SensorReadingRequest"
+        required: true
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SensorReadingRequest"
+          description: Reading stored; the body echoes it
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ValidationProblem"
+          description: "Invalid body: missing or invalid fields (listed in `errors`),\
+            \ malformed JSON or wrong types"
+        "415":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: The body is not `application/json`
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: "Unexpected error; details are only logged, never returned"
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: The database is unavailable; retry after `Retry-After` seconds
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying
+              schema:
+                type: integer
+                format: int32
+      summary: Send a sensor reading
+      tags:
+      - Readings
+components:
+  schemas:
+    ConfigUpdateRequest:
+      type: object
+      description: Constants to change; at least one
+      minProperties: 1
+      properties:
+        m:
+          type: number
+          format: double
+          description: Anomaly when the average of a sensor's readings in a cycle
+            exceeds it
+          example: 25
+        s:
+          type: number
+          format: double
+          description: Anomaly when max - min of a sensor's readings in a cycle exceeds
+            it
+          example: 34
+          minimum: 0
+    MonitorConfig:
+      type: object
+      description: Constants used to detect anomalies
+      properties:
+        m:
+          type: number
+          format: double
+        s:
+          type: number
+          format: double
+      required:
+      - m
+      - s
+    Problem:
+      type: object
+      description: RFC 9457 Problem Details
+      properties:
+        detail:
+          type: string
+          description: Explanation of this occurrence
+        instance:
+          type: string
+          format: uri-reference
+          description: Path of the request
+        status:
+          type: integer
+          format: int32
+          description: HTTP status code
+        title:
+          type: string
+          description: Short summary of the HTTP status
+        type:
+          type: string
+          format: uri
+          description: Problem type; `about:blank` when it is just the HTTP status
+    SensorReadingRequest:
+      type: object
+      description: A reading of one sensor
+      properties:
+        data:
+          type: number
+          format: double
+          description: Measured value
+          example: 33.54
+        sensorId:
+          type: string
+          description: Sensor that took the reading
+          example: sensor-2
+          minLength: 1
+          pattern: "[A-Za-z0-9._-]{1,64}"
+        timestamp:
+          type: string
+          description: "When the reading was taken. Stored as sent, not parsed"
+          example: 2026-09-24T08:12:49.515
+          minLength: 1
+          pattern: "[0-9A-Za-z:.+-]{1,64}"
+      required:
+      - data
+      - sensorId
+      - timestamp
+    ValidationProblem:
+      allOf:
+      - $ref: "#/components/schemas/Problem"
+      - type: object
+        properties:
+          errors:
+            type: array
+            items:
+              type: object
+              properties:
+                field:
+                  type: string
+                  description: Name of the invalid field
+                message:
+                  type: string
+                  description: Why it is invalid
+              required:
+              - field
+              - message
+      description: "Problem Details plus the invalid fields, when the body failed\
+        \ validation"

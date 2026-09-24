@@ -68,7 +68,7 @@ Pendientes que fueron quedando anotados en los ADRs:
 - [x] Pipeline de CI (build, tests contra Postgres, build de la imagen); Testcontainers evaluado y postergado (ADR-009)
 - [ ] Manifiestos de despliegue (p. ej. Kubernetes) usando los probes de liveness/readiness (ADR-006)
 - [x] Restringir `/actuator/prometheus` o moverlo a un puerto de management (ADR-007 → ADR-012)
-- [ ] Especificación OpenAPI de la API v1 (ADR-008)
+- [x] Especificación OpenAPI de la API v1 (ADR-008 → ADR-013)
 - [ ] `timestamp` tipado (ISO-8601 con zona) en una futura versión de la API (ADR-008)
 - [x] Validar al arranque el invariante entre cron y duraciones del lock (ADR-011)
 

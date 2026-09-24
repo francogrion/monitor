@@ -38,6 +38,14 @@ management:
         readiness:
           include: readinessState, db
 
+# OpenAPI document of the API at /v3/api-docs (JSON) and /v3/api-docs.yaml; committed copy in docs/openapi.yaml
+springdoc:
+  api-docs:
+    enabled: ${OPENAPI_ENABLED:true}
+  paths-to-match: /api/**
+  default-produces-media-type: application/json
+  writer-with-order-by-keys: true
+
 monitor:
   # Used only until M/S are set via the API; persisted values always win afterwards
   defaults:
