@@ -1,0 +1,12 @@
+CREATE TABLE config (
+    id BIGINT PRIMARY KEY,
+    m  DOUBLE PRECISION NOT NULL,
+    s  DOUBLE PRECISION NOT NULL
+);
+
+CREATE TABLE sensor_reading (
+    id        BIGSERIAL PRIMARY KEY,
+    sensor_id VARCHAR(255) NOT NULL,
+    data      DOUBLE PRECISION NOT NULL,
+    timestamp VARCHAR(255) NOT NULL
+);

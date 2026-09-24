@@ -1,13 +1,14 @@
 package com.service;
 
 import com.domain.SensorData;
+import com.domain.SensorReadingEntity;
+import com.repository.SensorReadingRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
-import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 
 import static com.utils.MathUtils.calculateAverage;
@@ -20,10 +21,11 @@ public class MonitorService {
     private static final Logger log = LoggerFactory.getLogger(MonitorService.class);
 
     private final ConfigService configService;
-    private final List<SensorData> dataList = Collections.synchronizedList(new ArrayList<>());
+    private final SensorReadingRepository sensorReadingRepository;
 
-    public MonitorService(ConfigService configService) {
+    public MonitorService(ConfigService configService, SensorReadingRepository sensorReadingRepository) {
         this.configService = configService;
+        this.sensorReadingRepository = sensorReadingRepository;
     }
 
     public void read(SensorData sensorData) {
@@ -32,18 +34,19 @@ public class MonitorService {
             throw new IllegalArgumentException("SensorData failed!");
         }
         log.info("Data collected: {}", sensorData);
-        dataList.add(sensorData);
+        sensorReadingRepository.save(toEntity(sensorData));
     }
 
     @Scheduled(fixedRate = 30000)
+    @Transactional
     public void processData() {
-        List<SensorData> snapshot;
-        synchronized (dataList) {
-            snapshot = new ArrayList<>(dataList);
-            dataList.clear();
-        }
+        List<SensorReadingEntity> pending = sensorReadingRepository.findAllByOrderByIdAsc();
+        List<SensorData> snapshot = pending.stream().map(MonitorService::toSensorData).toList();
+
         checkAverage(snapshot);
         checkDifference(snapshot);
+
+        sensorReadingRepository.deleteAllInBatch(pending);
         log.info("Data processed!");
     }
 
@@ -66,5 +69,21 @@ public class MonitorService {
         if (AnomalyChecker.isAverageAnomaly(avg, m)) {
             log.error("Average '{}' is greater than {}", avg, m);
         }
+    }
+
+    private static SensorReadingEntity toEntity(SensorData sensorData) {
+        SensorReadingEntity entity = new SensorReadingEntity();
+        entity.setSensorId(sensorData.getSensorId());
+        entity.setData(sensorData.getData());
+        entity.setTimestamp(sensorData.getTimestamp());
+        return entity;
+    }
+
+    private static SensorData toSensorData(SensorReadingEntity entity) {
+        SensorData sensorData = new SensorData();
+        sensorData.setSensorId(entity.getSensorId());
+        sensorData.setData(entity.getData());
+        sensorData.setTimestamp(entity.getTimestamp());
+        return sensorData;
     }
 }

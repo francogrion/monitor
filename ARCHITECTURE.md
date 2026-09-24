@@ -83,4 +83,38 @@ Al ejecutar la migración definida en ADR-001 surgieron varias decisiones concre
 
 ---
 
-*(Los próximos ADRs — persistencia, mecanismo de agregación coordinada, containerización, etc. — se agregan a medida que se van decidiendo, siguiendo las fases definidas en `PLANNING.md`.)*
+### ADR-003: PostgreSQL + Spring Data JPA + Flyway para el estado persistente (Fase 1)
+
+**Estado:** Aceptada
+
+**Contexto:**
+`ConfigService` y `MonitorService` guardaban `M`, `S` y el buffer de lecturas en memoria (beans `@Service` de Spring, pero sin persistencia real). Un reinicio del proceso perdía toda esa información, y no había forma de que múltiples instancias compartieran ese estado — el objetivo de la Fase 1 (ver `PLANNING.md`) era resolver esto.
+
+**Decisión:**
+Usar **PostgreSQL** como base de datos, con **Spring Data JPA** (Hibernate) como capa de acceso y **Flyway** para versionar el esquema, tanto para la configuración (`M`/`S`) como para el buffer de lecturas de sensores pendientes de agregación.
+
+**Por qué:**
+- Un único motor de datos cubre los dos casos de uso de esta fase (config de baja frecuencia y una cola de lecturas de alta frecuencia relativa, pero de volumen trivial: ~8 inserts/seg). Introducir dos motores distintos (p. ej. Postgres + Redis) hubiera sido complejidad operativa innecesaria para el volumen real del sistema.
+- Da garantías transaccionales: `processData()` lee y borra las lecturas ya agregadas dentro de la misma transacción (`@Transactional`), evitando perder o duplicar lecturas que lleguen concurrentemente durante el ciclo de agregación.
+- Es el camino más directo hacia la Fase 2 (agregación coordinada entre instancias): una tabla es un mecanismo de coordinación válido (con `SELECT ... FOR UPDATE` o similar) sin introducir aún un message broker.
+- Flyway deja el esquema versionado y reproducible (`src/main/resources/db/migration/V1__init.sql`) en vez de depender de `ddl-auto=update`, que puede generar cambios de esquema silenciosos. `spring.jpa.hibernate.ddl-auto` se configuró en `validate`: Hibernate valida contra el esquema real pero nunca lo modifica.
+- Las credenciales de conexión se externalizaron desde el día uno vía variables de entorno (`DB_URL`, `DB_USERNAME`, `DB_PASSWORD`, con defaults locales), adelantando parte de la Fase 3 para no introducir secretos hardcodeados en el código nuevo.
+
+**Cómo se probó (decisión de testing):**
+En vez de testear contra una base embebida distinta a la de producción (H2), se usa un **Postgres real local** tanto para desarrollo como para los tests de integración (`@DataJpaTest` con `@AutoConfigureTestDatabase(replace = Replace.NONE)` apuntando a una base `monitor_test` separada). Esto evita el clásico problema de "pasa en los tests con H2 pero falla en producción con Postgres" por diferencias de dialecto SQL. El costo es que correr los tests requiere un Postgres accesible (documentado en `README.md`); se evalúa Testcontainers como alternativa cuando el proyecto tenga Docker disponible en su pipeline de CI (Fase 4).
+
+**Alternativas consideradas:**
+- **H2 en memoria para tests, Postgres en producción**: descartado por el riesgo de falsos positivos en tests (dialectos SQL distintos).
+- **Redis** para el buffer de lecturas (por ser una cola de alta frecuencia): descartado en esta fase por volumen trivial de datos y por evitar sumar un segundo motor de persistencia antes de necesitarlo.
+- **`ddl-auto=update`**: descartado en favor de migraciones versionadas con Flyway, más seguras para un entorno con múltiples desarrolladores/instancias.
+
+**Consecuencias:**
+- Nuevas dependencias: `spring-boot-starter-data-jpa`, `org.postgresql:postgresql`, `spring-boot-starter-flyway` + `org.flywaydb:flyway-database-postgresql` (Flyway 10+ requiere el módulo de base de datos específico por separado; no viene incluido en el starter).
+- Nuevas entidades (`ConfigEntity`, `SensorReadingEntity`) y repositorios (`ConfigRepository`, `SensorReadingRepository`) en `com.domain` / `com.repository`.
+- `MonitorService.processData()` ahora borra explícitamente por lista de IDs (`deleteAllInBatch(pending)`) en lugar de vaciar todo el buffer, para no perder lecturas insertadas concurrentemente durante el ciclo de agregación.
+- Verificado manualmente: se mató el proceso con `kill -9` con lecturas y configuración pendientes de procesar, y al reiniciar el servidor `M`/`S` se recuperaron intactos y las lecturas pendientes se agregaron correctamente en el primer ciclo posterior al reinicio.
+- 48 tests en total (15 nuevos: 6 de repositorios contra Postgres real, 9 de servicios re-testeados con mocks de los repositorios).
+
+---
+
+*(Los próximos ADRs — mecanismo de agregación coordinada entre instancias, containerización, etc. — se agregan a medida que se van decidiendo, siguiendo las fases definidas en `PLANNING.md`.)*
