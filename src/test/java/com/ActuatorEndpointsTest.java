@@ -7,14 +7,16 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 
+import static org.hamcrest.Matchers.containsString;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @SpringBootTest(properties = "monitor.scheduling.enabled=false")
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
-class HealthEndpointTest {
+class ActuatorEndpointsTest {
 
     @Autowired
     private MockMvc mockMvc;
@@ -54,5 +56,15 @@ class HealthEndpointTest {
         mockMvc.perform(get("/actuator/env")).andExpect(status().isNotFound());
         mockMvc.perform(get("/actuator/beans")).andExpect(status().isNotFound());
         mockMvc.perform(get("/actuator/configprops")).andExpect(status().isNotFound());
+        mockMvc.perform(get("/actuator/metrics")).andExpect(status().isNotFound());
+    }
+
+    @Test
+    void shouldExposeBusinessMetricsInPrometheusFormat() throws Exception {
+        mockMvc.perform(get("/actuator/prometheus"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("monitor_readings_received_total")))
+                .andExpect(content().string(containsString("monitor_anomalies_total{type=\"average\"}")))
+                .andExpect(content().string(containsString("monitor_aggregation_batch_size_count")));
     }
 }

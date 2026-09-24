@@ -5,6 +5,9 @@ spring:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/monitor}
     username: ${DB_USERNAME:monitor}
     password: ${DB_PASSWORD:monitor}
+    hikari:
+      # Fail fast when the DB is unreachable instead of Hikari's 30s default, so request threads don't pile up
+      connection-timeout: ${DB_CONNECTION_TIMEOUT_MS:5000}
   jpa:
     hibernate:
       ddl-auto: validate
@@ -19,7 +22,7 @@ management:
   endpoints:
     web:
       exposure:
-        include: health
+        include: health, prometheus
   endpoint:
     health:
       show-components: always

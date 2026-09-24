@@ -33,10 +33,11 @@ PLUS: Allow the system to get messages via HTTP.
 
 The quickest way to run everything (Postgres + the service) only requires Docker:
 ```
-	docker compose up --build                  # one instance on http://localhost:8080
-	docker compose up --build --scale app=2    # two instances on ports 8080 and 8081, sharing the DB
-	docker compose down -v                     # stop and delete the database volume
+	docker compose up --build                                     # one instance on http://localhost:8080
+	APP_PORTS=8080-8081 docker compose up --build --scale app=2   # two instances on 8080 and 8081, sharing the DB
+	docker compose down -v                                        # stop and delete the database volume
 ```
+Inside the container, logs are JSON (ECS format) for log aggregators; outside Docker they are plain text.
 The image can also be built and run on its own, pointing it at any Postgres via the env vars in
 [Configuration](#configuration):
 ```
@@ -45,19 +46,33 @@ The image can also be built and run on its own, pointing it at any Postgres via 
 ```
 The image build skips the tests (they need a real Postgres); run `mvn verify` for them.
 
-# Health checks
+# Health checks and metrics
 
-Only the health endpoints of Spring Boot Actuator are exposed:
+Only these Spring Boot Actuator endpoints are exposed:
 
 | Endpoint | Includes | Use it for |
 |---|---|---|
 | `/actuator/health` | all components (no details) | general status |
 | `/actuator/health/liveness` | the application only | restart the container if it fails |
 | `/actuator/health/readiness` | the application and the database | stop sending traffic while it fails |
+| `/actuator/prometheus` | all metrics, Prometheus format | scraping by Prometheus |
 
 A database outage makes readiness return `503` while liveness stays `200`: the instance stops receiving
 traffic but is not restarted (restarting can't fix the database). The Docker image's `HEALTHCHECK` uses
-readiness.
+readiness. With the database down, requests (and readiness) fail after `DB_CONNECTION_TIMEOUT_MS`
+(5s by default), so probe timeouts should be longer than that.
+
+Business metrics, besides the JVM/HTTP/DB-pool ones Spring Boot provides:
+
+| Metric (Prometheus name) | Meaning |
+|---|---|
+| `monitor_readings_received_total` | readings accepted by `POST /monitor/data` |
+| `monitor_anomalies_total{type="average"\|"difference"}` | anomalies detected, by type |
+| `monitor_aggregation_batch_size_{count,sum,max}` | readings aggregated per cycle; `_count` is the number of cycles actually processed |
+| `tasks_scheduled_execution_seconds{code_function="processData"}` | duration and outcome of each aggregation run (provided by Spring). It also counts runs skipped because another instance held the lock |
+
+`/actuator/prometheus` is served on the same port as the API; in production restrict it to the monitoring
+network (ingress rules) or move actuator to a separate port with `MANAGEMENT_SERVER_PORT`.
 
 # Steps to run the server without Docker
 
@@ -110,12 +125,14 @@ Everything is configured through environment variables (defaults in `src/main/re
 | `DB_URL` | `jdbc:postgresql://localhost:5432/monitor` | JDBC URL of the Postgres database |
 | `DB_USERNAME` | `monitor` | Database user |
 | `DB_PASSWORD` | `monitor` | Database password |
+| `DB_CONNECTION_TIMEOUT_MS` | `5000` | How long a request waits for a DB connection before failing |
 | `MONITOR_DEFAULT_M` | `0` | Initial value of `M`, used until it is set via the API |
 | `MONITOR_DEFAULT_S` | `0` | Initial value of `S`, used until it is set via the API |
 | `MONITOR_AGGREGATION_CRON` | `0,30 * * * * *` | When aggregation runs (Spring cron, with seconds). Keep it wall-clock aligned so all instances fire in the same slots |
 | `MONITOR_LOCK_AT_LEAST_FOR` | `PT20S` | Minimum time the aggregation lock is held (absorbs clock skew between instances) |
 | `MONITOR_LOCK_AT_MOST_FOR` | `PT29S` | Maximum time the lock is held if the holder dies mid-run |
 | `MONITOR_SCHEDULING_ENABLED` | `true` | Set to `false` to disable scheduled aggregation on an instance |
+| `LOGGING_STRUCTURED_FORMAT_CONSOLE` | unset (`ecs` in the Docker image) | JSON log format: `ecs`, `logstash` or `gelf`; unset for plain text |
 
 When changing the cron, keep `MONITOR_LOCK_AT_LEAST_FOR` ≤ `MONITOR_LOCK_AT_MOST_FOR` < interval between slots;
 otherwise a slot can be skipped (lock still held) or run twice (lock released too early).

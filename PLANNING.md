@@ -55,9 +55,9 @@ Basado en el análisis de arquitectura (ver `ARCHITECTURE.md`). Estado: `[ ]` pe
 - [x] Health check (`/actuator/health`, con probes de liveness/readiness)
 
 ### Fase 5 — Observabilidad y resiliencia
-- [ ] Logging estructurado
-- [ ] Métricas (Micrometer / Prometheus)
-- [ ] Timeouts/reintentos si se agregan integraciones externas
+- [x] Logging estructurado (JSON ECS en contenedores, con campos por evento; ver ADR-007)
+- [x] Métricas (Micrometer / Prometheus: métricas de negocio + las que trae Spring Boot)
+- [x] Timeouts/reintentos si se agregan integraciones externas (no se agregaron; la única dependencia externa, la base, ahora falla rápido con timeout configurable)
 
 ### Fase 6 — API
 - [ ] Versionado de endpoints
