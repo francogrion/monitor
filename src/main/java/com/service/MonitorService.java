@@ -3,6 +3,7 @@ package com.service;
 import com.domain.SensorData;
 import com.domain.SensorReadingEntity;
 import com.repository.SensorReadingRepository;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -17,6 +18,8 @@ import static com.utils.MathUtils.calculateMin;
 
 @Service
 public class MonitorService {
+
+    public static final String PROCESS_LOCK_NAME = "processSensorData";
 
     private static final Logger log = LoggerFactory.getLogger(MonitorService.class);
 
@@ -37,7 +40,10 @@ public class MonitorService {
         sensorReadingRepository.save(toEntity(sensorData));
     }
 
-    @Scheduled(fixedRate = 30000)
+    // Wall-clock aligned so every instance fires at :00/:30; the lock lets exactly one win each slot,
+    // capping processing at 2 per minute cluster-wide. lockAtLeastFor absorbs clock skew between instances.
+    @Scheduled(cron = "0,30 * * * * *")
+    @SchedulerLock(name = PROCESS_LOCK_NAME, lockAtLeastFor = "PT20S", lockAtMostFor = "PT29S")
     @Transactional
     public void processData() {
         List<SensorReadingEntity> pending = sensorReadingRepository.findAllByOrderByIdAsc();

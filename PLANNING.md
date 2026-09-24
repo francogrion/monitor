@@ -44,8 +44,8 @@ Basado en el análisis de arquitectura (ver `ARCHITECTURE.md`). Estado: `[ ]` pe
 - [x] Persistir o encolar las lecturas de sensores pendientes de agregación
 
 ### Fase 2 — Diseño stateless / escalabilidad horizontal
-- [ ] Reemplazar el `Timer` en memoria por un mecanismo de agregación coordinado entre instancias (cola de mensajes o job coordinado)
-- [ ] Verificar que múltiples instancias del servicio puedan correr en paralelo sin duplicar ni perder datos
+- [x] Reemplazar el `Timer` en memoria por un mecanismo de agregación coordinado entre instancias (job coordinado con ShedLock + cron alineado al reloj, ver ADR-004)
+- [x] Verificar que múltiples instancias del servicio puedan correr en paralelo sin duplicar ni perder datos
 
 ### Fase 3 — Configuración externa
 - [ ] Externalizar puerto, valores iniciales de `M`/`S`, y demás configuración vía `application.yml` / variables de entorno
