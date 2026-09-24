@@ -1,0 +1,26 @@
+# Base manifests of the monitor service. Deploy through an overlay that sets the image, the DB_URL and the
+# monitor-db Secret (see overlays/local, and the README section "Running on Kubernetes").
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+labels:
+  - pairs:
+      app.kubernetes.io/name: monitor
+      app.kubernetes.io/part-of: monitor
+    includeSelectors: false
+
+resources:
+  - deployment.yaml
+  - service.yaml
+  - service-management.yaml
+  - pdb.yaml
+
+# Generated with a content hash in its name: changing a value rolls the pods, which only read env vars at startup
+configMapGenerator:
+  - name: monitor
+    envs:
+      - config.env
+
+images:
+  - name: monitor
+    newTag: latest

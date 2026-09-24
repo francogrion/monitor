@@ -1,0 +1,18 @@
+# Self-contained environment for kind/minikube/Docker Desktop: base + an ephemeral Postgres + dev credentials.
+#   kubectl apply -k deploy/kubernetes/overlays/local
+# Not for production: the database lives in an emptyDir and the credentials are the docker-compose ones.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: monitor
+
+resources:
+  - namespace.yaml
+  - ../../base
+  - postgres.yaml
+
+secretGenerator:
+  - name: monitor-db
+    literals:
+      - username=monitor
+      - password=monitor

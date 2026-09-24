@@ -11,6 +11,7 @@ Este documento describe la arquitectura del servicio `monitor`, su evolución y 
 - Empaquetado como imagen Docker (multi-stage, no-root, por capas) con health checks de liveness/readiness vía Actuator; `docker-compose.yml` levanta Postgres + el servicio (ADR-006).
 - Observabilidad: logs JSON (ECS) con campos estructurados por evento y métricas de negocio en `/actuator/prometheus`; la base tiene un timeout de conexión corto para fallar rápido (ADR-007).
 - Actuator (probes y Prometheus) en un puerto de management propio (9090), separado del puerto de la API (8080) (ADR-012).
+- Manifiestos de Kubernetes con kustomize (`deploy/kubernetes`): base endurecida (non-root, filesystem read-only, `restricted` PSS) y un overlay local autocontenido que CI despliega en kind (ADR-014).
 - API versionada bajo `/api/v1`, con validación de entrada y errores en formato RFC 9457 Problem Details; base caída → 503 con `Retry-After` (ADR-008). Contrato OpenAPI 3.1 generado desde el código, servido en `/v3/api-docs` y versionado en `docs/openapi.yaml` (ADR-013).
 - CI en GitHub Actions: tests contra Postgres real y smoke test de la imagen Docker en cada PR; Dependabot mantiene actualizadas las dependencias (ADR-009).
 - Las 6 fases del roadmap están completas; los pendientes propuestos están al final de `PLANNING.md`.
@@ -239,7 +240,7 @@ El servicio ya era stateless y configurable por variables de entorno (ADR-004, A
 
 **Pendiente / consecuencias:**
 - 64 tests en total (5 nuevos).
-- Todavía no hay pipeline de CI ni manifiestos de Kubernetes. Con Docker disponible en CI se puede evaluar Testcontainers para los tests de integración (mencionado en ADR-003).
+- Todavía no hay pipeline de CI ni manifiestos de Kubernetes *(CI: ADR-009; manifiestos: ADR-014)*. Con Docker disponible en CI se puede evaluar Testcontainers para los tests de integración (mencionado en ADR-003).
 
 ---
 
@@ -499,6 +500,78 @@ El contrato de la API v1 solo estaba descripto en el README. Un cliente no tení
 - 102 tests en total (6 nuevos).
 - Cambiar la API obliga a regenerar `docs/openapi.yaml` en el mismo PR, que es justamente lo buscado.
 - springdoc queda como dependencia de producción y Dependabot lo actualiza. Una actualización que cambie cómo se genera el YAML va a hacer fallar el test de drift, y hay que regenerar el archivo en ese PR.
+
+---
+
+### ADR-014: Manifiestos de Kubernetes con kustomize, validados en kind
+
+**Estado:** Aceptada. Resuelve el pendiente de ADR-006.
+
+**Contexto:**
+El servicio ya estaba preparado para correr en Kubernetes: sin estado por instancia (ADR-004), configuración por variables de entorno (ADR-005), probes de liveness/readiness (ADR-006) y actuator en un puerto propio (ADR-012). Faltaban los manifiestos que lo aprovechen, y un chequeo de que realmente despliegan.
+
+**Decisión:**
+- **kustomize, con `base/` y overlays.** Viene integrado en `kubectl` (`apply -k`), no necesita templates y cada entorno parchea lo suyo. `overlays/local` es un entorno autocontenido para clusters locales y para CI.
+- **Deployment:**
+  - **Réplicas y rollout:** 2 réplicas (ShedLock coordina la agregación, ADR-004), `maxUnavailable: 0`, PodDisruptionBudget `minAvailable: 1` y `topologySpreadConstraints` por nodo.
+  - **Probes, todas contra el puerto `management`:**
+    - `startupProbe` da hasta 120 s de arranque.
+    - `livenessProbe` usa liveness, que no incluye la base, para no reiniciar pods por una caída de la base.
+    - `readinessProbe` usa readiness con `timeoutSeconds: 7`, mayor que el timeout de conexión a la base (5 s). Si no, una caída de la base se vería como un pod colgado.
+  - **Apagado:** `preStop` con `sleep` de 5 s, para que la baja del endpoint llegue a los Services antes de que Spring cierre. `terminationGracePeriodSeconds: 45` cubre ese sleep más el graceful shutdown de Spring (30 s).
+  - **Seguridad:**
+    - `runAsNonRoot`, `readOnlyRootFilesystem`, `allowPrivilegeEscalation: false`, capabilities `drop: [ALL]` y seccomp `RuntimeDefault`.
+    - `/tmp` como `emptyDir`, que Tomcat y la JVM necesitan escribir.
+    - `automountServiceAccountToken: false`, porque el servicio no habla con la API de Kubernetes.
+    - `enableServiceLinks: false`. Si no, Kubernetes inyecta variables como `MONITOR_MANAGEMENT_PORT=tcp://...` por cada Service del namespace, y el prefijo `MONITOR_` es justamente el de nuestra configuración.
+  - **Recursos:** requests de 250m de CPU y 512Mi de memoria; límite de memoria de 512Mi (el heap es el 75 %, por el `MaxRAMPercentage` de la imagen). Sin límite de CPU, para evitar el throttling del CFS.
+- **Imagen con usuario numérico (`USER 10001:10001`).** Con `USER app`, el kubelet no puede verificar `runAsNonRoot` y no arranca el contenedor (`CreateContainerConfigError`). Además, el UID que asignaba `useradd --system` (999) dependía de la imagen base.
+- **Configuración:**
+  - `configMapGenerator` desde `config.env`: el nombre lleva un hash del contenido, así que cambiar un valor dispara un rollout. Los pods solo leen las variables al arrancar.
+  - Las credenciales van en un Secret `monitor-db` que no está en el repo. El overlay local lo genera con las credenciales de desarrollo de docker-compose.
+- **Dos Services:** `monitor` (API, puerto 80 → `http`) para el Ingress/Gateway, y `monitor-management` (9090) solo para el scraping de Prometheus. Los pods también tienen las anotaciones `prometheus.io/*`.
+- **El namespace del overlay local aplica el Pod Security Standard `restricted`.** Desplegarlo verifica el securityContext en el propio API server. El Postgres local también cumple: corre como 999 con `PGDATA` en un subdirectorio del volumen.
+- **CI (job "Kubernetes manifests"):**
+  - kubeconform `-strict` sobre las dos kustomizations, con la imagen fijada por digest;
+  - un cluster kind con la imagen construida en el mismo job;
+  - `apply -k` del overlay local y `rollout status`;
+  - llamadas a la API a través de los Services, con `port-forward`.
+
+**Alternativas consideradas:**
+- **Helm chart:** más potente para distribuir a terceros, pero los templates hacen más difícil leer y revisar los manifiestos. Para un servicio con un solo equipo alcanza con kustomize.
+- **Postgres en la base:** en producción la base debería ser administrada (o un operador) con backups y almacenamiento persistente. Un Deployment con `emptyDir` en la base invitaría a usarlo en producción. Por eso solo está en el overlay local.
+- **NetworkPolicy para el puerto 9090:** depende de cómo se etiquete el namespace de monitoreo y de que el CNI las soporte. Queda para el overlay de cada entorno.
+- **HorizontalPodAutoscaler:** la carga es chica y la agregación no escala con las réplicas; se puede agregar cuando haya datos de uso.
+
+**Cómo se probó:**
+- `KubernetesManifestsTest` (12 tests). Lee `base/` y verifica invariantes que un schema no puede ver:
+  - los puertos `http`/`management` coinciden con los de la app;
+  - los probes apuntan a management, con las rutas correctas;
+  - el timeout de readiness es mayor que el de la base;
+  - cada Service apunta a su puerto;
+  - securityContext, `/tmp` escribible, `enableServiceLinks: false` y recursos;
+  - las credenciales salen de un Secret;
+  - las claves de `config.env` son variables que `application.yml` realmente lee, para que un typo no caiga en silencio al default;
+  - réplicas, estrategia y PDB;
+  - `USER` numérico en el Dockerfile.
+
+  Primero falló por no existir los manifiestos. Después falló solo el de `USER`, con `app`.
+- kubeconform `-strict` contra los schemas de Kubernetes 1.37: 14 recursos válidos.
+- Manual, con la imagen corriendo con las mismas restricciones que el pod (`--read-only`, `--tmpfs /tmp`, `--cap-drop ALL`, `no-new-privileges`, `--memory 512m`, UID 10001):
+  - readiness `UP`;
+  - `PATCH` y `POST` (202) funcionan;
+  - los ciclos de agregación con ShedLock corren;
+  - usa unos 300 MiB de 512 MiB;
+  - se detiene al instante con SIGTERM.
+
+  Postgres también arrancó como UID 999 con `PGDATA` en un subdirectorio.
+- kind no pudo correr en el sandbox de desarrollo: el runc anidado no puede escribir `oom_score_adj`, una restricción del kernel de esa VM. Por eso el despliegue real en un cluster lo verifica el job de CI, en un runner con cgroup v2.
+
+**Consecuencias:**
+- 114 tests en total (12 nuevos).
+- Un tercer job en CI, de unos minutos. Conviene sumarlo a los checks requeridos de la protección de `master`.
+- `preStop.sleep` requiere Kubernetes 1.30 o posterior.
+- El cambio de UID de la imagen (999 → 10001) afecta a quien monte volúmenes con permisos del UID anterior; hoy la imagen no escribe fuera de `/tmp`.
 
 ---
 
